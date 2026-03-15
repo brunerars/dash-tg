@@ -117,19 +117,7 @@ jobs:
 
             IMAGE_API="${{ env.IMAGE_API }}"
             IMAGE_FRONTEND="${{ env.IMAGE_FRONTEND }}"
-
-            resolve_service() {
-              expected="$1"
-              suffix="$2"
-              if docker service inspect "${expected}" >/dev/null 2>&1; then
-                echo "${expected}"; return 0
-              fi
-              found="$(docker service ls --format '{{.Name}}' | grep -E "_${suffix}$" | head -n 1 || true)"
-              if [ -n "${found}" ]; then
-                echo "${found}"; return 0
-              fi
-              return 1
-            }
+            STACK="api-esoccer"
 
             echo "🔐 Login no registry..."
             echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
@@ -138,22 +126,23 @@ jobs:
             docker pull "${IMAGE_API}:latest"
             docker pull "${IMAGE_FRONTEND}:latest"
 
+            echo "📋 Serviços disponíveis na stack:"
+            docker service ls --format '{{.Name}}' | grep "^${STACK}_" || echo "(nenhum)"
+
             # --- API ---
-            SVC_API="$(resolve_service "api-esoccer_api" "api")" || true
-            if [ -n "${SVC_API}" ]; then
-              echo "🚀 Atualizando API (${SVC_API})..."
-              docker service update --image "${IMAGE_API}:latest" --with-registry-auth --force "${SVC_API}"
+            if docker service inspect "${STACK}_api" >/dev/null 2>&1; then
+              echo "🚀 Atualizando ${STACK}_api..."
+              docker service update --image "${IMAGE_API}:latest" --with-registry-auth --force "${STACK}_api"
             else
-              echo "⚠️  Serviço API não encontrado. Crie a stack no Portainer."
+              echo "⚠️  Serviço ${STACK}_api não encontrado."
             fi
 
             # --- Frontend ---
-            SVC_FRONT="$(resolve_service "api-esoccer_frontend" "frontend")" || true
-            if [ -n "${SVC_FRONT}" ]; then
-              echo "🚀 Atualizando Frontend (${SVC_FRONT})..."
-              docker service update --image "${IMAGE_FRONTEND}:latest" --with-registry-auth --force "${SVC_FRONT}"
+            if docker service inspect "${STACK}_frontend" >/dev/null 2>&1; then
+              echo "🚀 Atualizando ${STACK}_frontend..."
+              docker service update --image "${IMAGE_FRONTEND}:latest" --with-registry-auth --force "${STACK}_frontend"
             else
-              echo "⚠️  Serviço Frontend não encontrado. Redeploy a stack para criá-lo."
+              echo "⚠️  Serviço ${STACK}_frontend não encontrado. Redeploy a stack no Portainer."
             fi
 
             echo "🧹 Limpando imagens antigas..."
