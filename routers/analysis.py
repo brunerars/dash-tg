@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import hashlib
 import io
 import json
+import pickle
 from datetime import date as date_type, time as time_type
 from typing import Annotated
 
@@ -13,6 +15,8 @@ from config.strategies import ESTRATEGIAS, get_strategy_internal
 from esoccer_dashboard.services.cache import (
     delete_cache_key,
     gerar_cache_key,
+    get_file_df,
+    store_file_df,
     get_blueprint,
     get_cache_stats,
     get_export,
@@ -59,11 +63,21 @@ async def _analyze_with_strategy(
     cache_key = gerar_cache_key(files_bytes, strategy_name, date_from, date_to, horarios)
 
     def compute() -> dict:
-        adapters = [_UploadFileAdapter(name, content) for name, content in files_contents]
+        # 1. Carregar com cache individual por arquivo
+        frames: list[pd.DataFrame] = []
+        for name, content in files_contents:
+            file_hash = hashlib.md5(content).hexdigest()
+            cached_pickle = get_file_df(file_hash)
+            if cached_pickle:
+                frames.append(pickle.loads(cached_pickle))
+            else:
+                adapter = _UploadFileAdapter(name, content)
+                result = load_tips_enviadas([adapter])
+                store_file_df(file_hash, pickle.dumps(result.df))
+                frames.append(result.df)
 
-        # 1. Carregar
-        load_result = load_tips_enviadas(adapters)
-        df = load_result.df
+        df = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+        load_result = LoadResult(df=df, total_jogos_brutos=int(len(df)))
 
         # 1b. Filtrar por período (se informado) — antes da normalização e dedup
         if date_from or date_to:

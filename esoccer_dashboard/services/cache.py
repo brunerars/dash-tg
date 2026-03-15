@@ -78,6 +78,19 @@ def get_blueprint(cache_key: str) -> str | None:
     return raw.decode("utf-8") if raw else None
 
 
+def store_file_df(file_hash: str, pickled: bytes, ttl: int = CACHE_TTL_ANALYSIS) -> None:
+    """Armazena DataFrame parseado (pickle) de um arquivo individual."""
+    r = get_redis_client()
+    r.setex(f"filedf:{file_hash}", ttl, pickled)
+
+
+def get_file_df(file_hash: str) -> bytes | None:
+    """Recupera DataFrame parseado de um arquivo individual."""
+    r = get_redis_client()
+    raw = r.get(f"filedf:{file_hash}")
+    return raw if raw else None
+
+
 def delete_cache_key(cache_key: str) -> bool:
     r = get_redis_client()
     deleted = r.delete(f"analysis:{cache_key}", f"export:{cache_key}", f"blueprint:{cache_key}")
