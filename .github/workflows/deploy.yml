@@ -7,8 +7,8 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_API: ghcr.io/${{ github.repository_owner }}/api-esoccer
-  IMAGE_FRONTEND: ghcr.io/${{ github.repository_owner }}/esoccer-frontend
+  IMAGE_API: ghcr.io/${{ github.repository }}/api
+  IMAGE_FRONTEND: ghcr.io/${{ github.repository }}/frontend
 
 concurrency:
   group: deploy-esoccer-${{ github.ref }}
