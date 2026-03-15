@@ -6,7 +6,7 @@ import { AnalysisFilters } from "./AnalysisFilters";
 import { FilterBar } from "./FilterBar";
 import { ResultsTable, type ResultRow } from "./ResultsTable";
 import { PlayerComparisonCard } from "./PlayerComparisonCard";
-import { analyzeFiles, exportFilteredResults, normalizeResult, detectBet } from "../services/api";
+import { analyzeFiles, exportFilteredResults, normalizeResult } from "../services/api";
 import { useSession } from "./SessionContext";
 import { useState } from "react";
 import type { ColumnDef } from "./ColumnConfigModal";
@@ -46,7 +46,7 @@ export function DalePage() {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const { files, results: allResults, cacheKey, hasAnalyzed, selectedBets, minMatches, minPercentage, dateFrom, dateTo } = dale;
+  const { files, results: allResults, cacheKey, hasAnalyzed, selectedFiles, minMatches, minPercentage, dateFrom, dateTo } = dale;
 
   const set = <K extends keyof typeof dale>(key: K, value: typeof dale[K]) =>
     setDale((prev) => ({ ...prev, [key]: value }));
@@ -54,18 +54,12 @@ export function DalePage() {
   const columnConfig = dale.columnConfig.length > 0 ? dale.columnConfig : buildDefaultColumnConfig(daleColumns);
   const visibleColumns = getVisibleColumns(columnConfig, daleColumns);
 
-  // Derive available bets from filenames
-  const availableBets = useMemo(() => {
-    const set = new Set<string>();
-    for (const f of files) set.add(detectBet(f.name));
-    return Array.from(set).sort();
-  }, [files]);
+  const allFileNames = useMemo(() => files.map((f) => f.name), [files]);
 
-  // Files filtered by selected bets (empty = all)
   const filteredFiles = useMemo(() => {
-    if (selectedBets.length === 0) return files;
-    return files.filter((f) => selectedBets.includes(detectBet(f.name)));
-  }, [files, selectedBets]);
+    if (selectedFiles.length === 0) return files;
+    return files.filter((f) => selectedFiles.includes(f.name));
+  }, [files, selectedFiles]);
 
   const filteredResults = useMemo(() => {
     let rows = allResults;
@@ -89,31 +83,31 @@ export function DalePage() {
   const hasAnalyzedRef = useRef(false);
   useEffect(() => { hasAnalyzedRef.current = hasAnalyzed; }, [hasAnalyzed]);
 
-  const prevBets = useRef(selectedBets);
+  const prevFiles = useRef(selectedFiles);
   const prevDateFrom = useRef(dateFrom);
   const prevDateTo = useRef(dateTo);
 
   useEffect(() => {
-    const betsChanged = prevBets.current !== selectedBets;
+    const filesChanged = prevFiles.current !== selectedFiles;
     const dateChanged = prevDateFrom.current !== dateFrom || prevDateTo.current !== dateTo;
-    prevBets.current = selectedBets;
+    prevFiles.current = selectedFiles;
     prevDateFrom.current = dateFrom;
     prevDateTo.current = dateTo;
 
     if (!hasAnalyzedRef.current || files.length === 0) return;
-    if (!betsChanged && !dateChanged) return;
+    if (!filesChanged && !dateChanged) return;
     if ((dateFrom && !dateTo) || (!dateFrom && dateTo)) return;
 
     const timer = setTimeout(() => { handleAnalyze(); }, 300);
     return () => clearTimeout(timer);
-  }, [selectedBets, dateFrom, dateTo]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [selectedFiles, dateFrom, dateTo]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleAnalyze = async () => {
     const current = daleRef.current;
-    const bets = current.selectedBets;
+    const sel = current.selectedFiles;
     const allFiles = current.files;
-    const toSend = bets.length > 0
-      ? allFiles.filter((f) => bets.includes(detectBet(f.name)))
+    const toSend = sel.length > 0
+      ? allFiles.filter((f) => sel.includes(f.name))
       : allFiles;
     if (toSend.length === 0) return;
     setIsAnalyzing(true);
@@ -196,9 +190,9 @@ export function DalePage() {
           results={allResults}
           playerSearch={dale.playerSearch}
           onPlayerSearchChange={(v) => set("playerSearch", v)}
-          availableBets={availableBets}
-          selectedBets={dale.selectedBets}
-          onSelectedBetsChange={(v) => set("selectedBets", v)}
+          allFileNames={allFileNames}
+          selectedFiles={dale.selectedFiles}
+          onSelectedFilesChange={(v) => set("selectedFiles", v)}
           selectedTournaments={dale.selectedTournaments}
           onSelectedTournamentsChange={(v) => set("selectedTournaments", v)}
           minMatches={dale.minMatches}

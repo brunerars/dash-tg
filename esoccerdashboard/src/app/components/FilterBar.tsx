@@ -7,16 +7,15 @@ interface FilterBarProps {
   results: ResultRow[];
   playerSearch: string;
   onPlayerSearchChange: (v: string) => void;
-  selectedBets: string[];
-  onSelectedBetsChange: (v: string[]) => void;
+  allFileNames: string[];
+  selectedFiles: string[];
+  onSelectedFilesChange: (v: string[]) => void;
   selectedTournaments: string[];
   onSelectedTournamentsChange: (v: string[]) => void;
   minMatches: number;
   onMinMatchesChange: (v: number) => void;
   minPercentage: number;
   onMinPercentageChange: (v: number) => void;
-  // Optional pre-computed bets from filenames
-  availableBets?: string[];
   // Optional Linha filter (only for Over/Under)
   selectedLinhas?: string[];
   onSelectedLinhasChange?: (v: string[]) => void;
@@ -30,8 +29,9 @@ export function FilterBar({
   results,
   playerSearch,
   onPlayerSearchChange,
-  selectedBets,
-  onSelectedBetsChange,
+  allFileNames,
+  selectedFiles,
+  onSelectedFilesChange,
   selectedTournaments,
   onSelectedTournamentsChange,
   minMatches,
@@ -40,7 +40,6 @@ export function FilterBar({
   onMinPercentageChange,
   selectedLinhas,
   onSelectedLinhasChange,
-  availableBets,
   availableHorarios,
   selectedHorarios,
   onSelectedHorariosChange,
@@ -48,25 +47,18 @@ export function FilterBar({
   const { theme } = useTheme();
   const isDark = theme === "dark";
   const [tournamentOpen, setTournamentOpen] = useState(false);
-  const [betOpen, setBetOpen] = useState(false);
+  const [filesOpen, setFilesOpen] = useState(false);
   const [linhaOpen, setLinhaOpen] = useState(false);
   const [horarioOpen, setHorarioOpen] = useState(false);
   const tournamentRef = useRef<HTMLDivElement>(null);
-  const betRef = useRef<HTMLDivElement>(null);
+  const filesRef = useRef<HTMLDivElement>(null);
   const linhaRef = useRef<HTMLDivElement>(null);
   const horarioRef = useRef<HTMLDivElement>(null);
 
   const sliderFillColor = isDark ? "#ea580c" : "#171717";
   const sliderEmptyColor = isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.1)";
 
-  const allBets = useMemo(() => {
-    if (availableBets && availableBets.length > 0) return availableBets;
-    const set = new Set<string>();
-    for (const r of results) {
-      if (r.fontes) for (const f of r.fontes) set.add(f);
-    }
-    return Array.from(set).sort();
-  }, [results, availableBets]);
+  const hasFilesFilter = allFileNames.length > 1;
 
   const allLeagues = useMemo(() => {
     const set = new Set<string>();
@@ -95,7 +87,7 @@ export function FilterBar({
   useEffect(() => {
     const handler = (e: MouseEvent) => {
       if (tournamentRef.current && !tournamentRef.current.contains(e.target as Node)) setTournamentOpen(false);
-      if (betRef.current && !betRef.current.contains(e.target as Node)) setBetOpen(false);
+      if (filesRef.current && !filesRef.current.contains(e.target as Node)) setFilesOpen(false);
       if (linhaRef.current && !linhaRef.current.contains(e.target as Node)) setLinhaOpen(false);
       if (horarioRef.current && !horarioRef.current.contains(e.target as Node)) setHorarioOpen(false);
     };
@@ -103,11 +95,11 @@ export function FilterBar({
     return () => document.removeEventListener("mousedown", handler);
   }, []);
 
-  const toggleBet = (bet: string) => {
-    if (selectedBets.includes(bet)) {
-      onSelectedBetsChange(selectedBets.filter((b) => b !== bet));
+  const toggleFile = (name: string) => {
+    if (selectedFiles.includes(name)) {
+      onSelectedFilesChange(selectedFiles.filter((f) => f !== name));
     } else {
-      onSelectedBetsChange([...selectedBets, bet]);
+      onSelectedFilesChange([...selectedFiles, name]);
     }
   };
 
@@ -203,25 +195,27 @@ export function FilterBar({
           </div>
         </div>
 
-        {/* Row 1, Col 2: Bet */}
-        <CheckboxDropdown
-          icon={<Filter className="w-3.5 h-3.5 shrink-0" style={{ color: "#ea580c" }} />}
-          label="Bet"
-          labelStyle={labelStyle}
-          inputStyle={inputStyle}
-          dropdownStyle={dropdownStyle}
-          hoverBg={hoverBg}
-          inputColor={inputColor}
-          labelColor={labelColor}
-          isOpen={betOpen}
-          setIsOpen={setBetOpen}
-          containerRef={betRef}
-          items={allBets}
-          selected={selectedBets}
-          onToggle={toggleBet}
-          onClear={() => onSelectedBetsChange([])}
-          emptyLabel="Todas"
-        />
+        {/* Row 1, Col 2: Planilhas */}
+        {hasFilesFilter && (
+          <CheckboxDropdown
+            icon={<Filter className="w-3.5 h-3.5 shrink-0" style={{ color: "#ea580c" }} />}
+            label="Planilhas"
+            labelStyle={labelStyle}
+            inputStyle={inputStyle}
+            dropdownStyle={{ ...dropdownStyle, minWidth: 280 }}
+            hoverBg={hoverBg}
+            inputColor={inputColor}
+            labelColor={labelColor}
+            isOpen={filesOpen}
+            setIsOpen={setFilesOpen}
+            containerRef={filesRef}
+            items={allFileNames}
+            selected={selectedFiles}
+            onToggle={toggleFile}
+            onClear={() => onSelectedFilesChange([])}
+            emptyLabel="Todas"
+          />
+        )}
 
         {/* Row 1, Col 3: Tournament */}
         <CheckboxDropdown

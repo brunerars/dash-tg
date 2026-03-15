@@ -6,7 +6,7 @@ import { AnalysisFilters } from "./AnalysisFilters";
 import { FilterBar } from "./FilterBar";
 import { ResultsTable, type ResultRow } from "./ResultsTable";
 import { PlayerComparisonCard } from "./PlayerComparisonCard";
-import { analyzeFiles, exportFilteredResults, normalizeResult, extractHorariosFromFiles, detectBet } from "../services/api";
+import { analyzeFiles, exportFilteredResults, normalizeResult, extractHorariosFromFiles } from "../services/api";
 import { useSession } from "./SessionContext";
 import type { ColumnDef } from "./ColumnConfigModal";
 
@@ -46,7 +46,7 @@ export function OverUnderPage() {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const { files, results: allResults, cacheKey, hasAnalyzed, selectedBets, minMatches, minPercentage, dateFrom, dateTo } = overUnder;
+  const { files, results: allResults, cacheKey, hasAnalyzed, selectedFiles, minMatches, minPercentage, dateFrom, dateTo } = overUnder;
 
   const set = <K extends keyof typeof overUnder>(key: K, value: typeof overUnder[K]) =>
     setOverUnder((prev) => ({ ...prev, [key]: value }));
@@ -54,18 +54,12 @@ export function OverUnderPage() {
   const columnConfig = overUnder.columnConfig.length > 0 ? overUnder.columnConfig : buildDefaultColumnConfig(overUnderColumns);
   const visibleColumns = getVisibleColumns(columnConfig, overUnderColumns);
 
-  // Derive available bets from filenames
-  const availableBets = useMemo(() => {
-    const set = new Set<string>();
-    for (const f of files) set.add(detectBet(f.name));
-    return Array.from(set).sort();
-  }, [files]);
+  const allFileNames = useMemo(() => files.map((f) => f.name), [files]);
 
-  // Files filtered by selected bets (empty = all)
   const filteredFiles = useMemo(() => {
-    if (selectedBets.length === 0) return files;
-    return files.filter((f) => selectedBets.includes(detectBet(f.name)));
-  }, [files, selectedBets]);
+    if (selectedFiles.length === 0) return files;
+    return files.filter((f) => selectedFiles.includes(f.name));
+  }, [files, selectedFiles]);
 
   const handleFilesChange = useCallback((newFiles: File[]) => {
     setOverUnder((prev) => ({ ...prev, files: newFiles, availableHorarios: [], selectedHorarios: [] }));
@@ -100,36 +94,36 @@ export function OverUnderPage() {
   const hasAnalyzedRef = useRef(false);
   useEffect(() => { hasAnalyzedRef.current = hasAnalyzed; }, [hasAnalyzed]);
 
-  const prevBets = useRef(selectedBets);
+  const prevFiles = useRef(selectedFiles);
   const prevHorarios = useRef(overUnder.selectedHorarios);
   const prevDateFrom = useRef(dateFrom);
   const prevDateTo = useRef(dateTo);
 
   useEffect(() => {
-    const betsChanged = prevBets.current !== selectedBets;
+    const filesChanged = prevFiles.current !== selectedFiles;
     const horariosChanged = prevHorarios.current !== overUnder.selectedHorarios;
     const dateChanged = prevDateFrom.current !== dateFrom || prevDateTo.current !== dateTo;
-    prevBets.current = selectedBets;
+    prevFiles.current = selectedFiles;
     prevHorarios.current = overUnder.selectedHorarios;
     prevDateFrom.current = dateFrom;
     prevDateTo.current = dateTo;
 
     if (!hasAnalyzedRef.current || files.length === 0) return;
-    if (!betsChanged && !horariosChanged && !dateChanged) return;
+    if (!filesChanged && !horariosChanged && !dateChanged) return;
     if ((dateFrom && !dateTo) || (!dateFrom && dateTo)) return;
 
     const timer = setTimeout(() => {
       handleAnalyze();
     }, 300);
     return () => clearTimeout(timer);
-  }, [selectedBets, overUnder.selectedHorarios, dateFrom, dateTo]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [selectedFiles, overUnder.selectedHorarios, dateFrom, dateTo]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleAnalyze = async () => {
     const current = ouRef.current;
-    const bets = current.selectedBets;
+    const sel = current.selectedFiles;
     const allFiles = current.files;
-    const toSend = bets.length > 0
-      ? allFiles.filter((f) => bets.includes(detectBet(f.name)))
+    const toSend = sel.length > 0
+      ? allFiles.filter((f) => sel.includes(f.name))
       : allFiles;
     if (toSend.length === 0) return;
     setIsAnalyzing(true);
@@ -218,9 +212,9 @@ export function OverUnderPage() {
           results={allResults}
           playerSearch={overUnder.playerSearch}
           onPlayerSearchChange={(v) => set("playerSearch", v)}
-          availableBets={availableBets}
-          selectedBets={overUnder.selectedBets}
-          onSelectedBetsChange={(v) => set("selectedBets", v)}
+          allFileNames={allFileNames}
+          selectedFiles={overUnder.selectedFiles}
+          onSelectedFilesChange={(v) => set("selectedFiles", v)}
           selectedTournaments={overUnder.selectedTournaments}
           onSelectedTournamentsChange={(v) => set("selectedTournaments", v)}
           minMatches={overUnder.minMatches}
