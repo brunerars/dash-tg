@@ -15,6 +15,8 @@ interface FilterBarProps {
   onMinMatchesChange: (v: number) => void;
   minPercentage: number;
   onMinPercentageChange: (v: number) => void;
+  // Optional pre-computed bets from filenames
+  availableBets?: string[];
   // Optional Linha filter (only for Over/Under)
   selectedLinhas?: string[];
   onSelectedLinhasChange?: (v: string[]) => void;
@@ -38,6 +40,7 @@ export function FilterBar({
   onMinPercentageChange,
   selectedLinhas,
   onSelectedLinhasChange,
+  availableBets,
   availableHorarios,
   selectedHorarios,
   onSelectedHorariosChange,
@@ -57,12 +60,13 @@ export function FilterBar({
   const sliderEmptyColor = isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.1)";
 
   const allBets = useMemo(() => {
+    if (availableBets && availableBets.length > 0) return availableBets;
     const set = new Set<string>();
     for (const r of results) {
       if (r.fontes) for (const f of r.fontes) set.add(f);
     }
     return Array.from(set).sort();
-  }, [results]);
+  }, [results, availableBets]);
 
   const allLeagues = useMemo(() => {
     const set = new Set<string>();
@@ -293,6 +297,7 @@ export function FilterBar({
             onToggle={toggleHorario}
             onClear={() => onSelectedHorariosChange!([])}
             emptyLabel="Todos"
+            formatItem={(item) => `${item} min`}
           />
         )}
 
@@ -318,7 +323,7 @@ export function FilterBar({
 
 /* ── Reusable dropdown components ─────────────────────────────── */
 
-function CheckboxDropdown({ icon, label, labelStyle, inputStyle, dropdownStyle, hoverBg, inputColor, labelColor, isOpen, setIsOpen, containerRef, items, selected, onToggle, onClear, emptyLabel }: {
+function CheckboxDropdown({ icon, label, labelStyle, inputStyle, dropdownStyle, hoverBg, inputColor, labelColor, isOpen, setIsOpen, containerRef, items, selected, onToggle, onClear, emptyLabel, formatItem }: {
   icon: React.ReactNode;
   label: string;
   labelStyle: React.CSSProperties;
@@ -335,6 +340,7 @@ function CheckboxDropdown({ icon, label, labelStyle, inputStyle, dropdownStyle, 
   onToggle: (v: string) => void;
   onClear: () => void;
   emptyLabel: string;
+  formatItem?: (item: string) => string;
 }) {
   return (
     <div className="flex items-center gap-2" style={{ position: "relative", overflow: "visible" }} ref={containerRef}>
@@ -366,7 +372,7 @@ function CheckboxDropdown({ icon, label, labelStyle, inputStyle, dropdownStyle, 
                 onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}
               >
                 <input type="checkbox" checked={selected.includes(item)} onChange={() => onToggle(item)} style={{ accentColor: "#ea580c" }} />
-                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item}</span>
+                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{formatItem ? formatItem(item) : item}</span>
               </label>
             ))}
           </div>

@@ -6,7 +6,7 @@ import { AnalysisFilters } from "./AnalysisFilters";
 import { FilterBar } from "./FilterBar";
 import { ResultsTable, type ResultRow } from "./ResultsTable";
 import { PlayerComparisonCard } from "./PlayerComparisonCard";
-import { analyzeFiles, exportFilteredResults, normalizeResult } from "../services/api";
+import { analyzeFiles, exportFilteredResults, normalizeResult, detectBet } from "../services/api";
 import { useSession } from "./SessionContext";
 import { useState } from "react";
 import type { ColumnDef } from "./ColumnConfigModal";
@@ -54,10 +54,21 @@ export function DalePage() {
   const columnConfig = dale.columnConfig.length > 0 ? dale.columnConfig : buildDefaultColumnConfig(daleColumns);
   const visibleColumns = getVisibleColumns(columnConfig, daleColumns);
 
+  // Derive available bets from filenames
+  const availableBets = useMemo(() => {
+    const set = new Set<string>();
+    for (const f of files) set.add(detectBet(f.name));
+    return Array.from(set).sort();
+  }, [files]);
+
+  // Files filtered by selected bets (empty = all)
+  const filteredFiles = useMemo(() => {
+    if (selectedBets.length === 0) return files;
+    return files.filter((f) => selectedBets.includes(detectBet(f.name)));
+  }, [files, selectedBets]);
+
   const filteredResults = useMemo(() => {
     let rows = allResults;
-    if (selectedBets.length > 0)
-      rows = rows.filter((r) => r.fontes.some((f) => selectedBets.includes(f)));
     rows = rows.filter((r) => r.partidas >= minMatches && r.porcentagem >= minPercentage);
     if (dale.playerSearch.trim()) {
       const q = dale.playerSearch.trim().toLowerCase();
@@ -69,33 +80,38 @@ export function DalePage() {
         return dale.selectedTournaments.some((t) => leagues.includes(t));
       });
     return rows;
-  }, [allResults, selectedBets, minMatches, minPercentage, dale.playerSearch, dale.selectedTournaments]);
+  }, [allResults, minMatches, minPercentage, dale.playerSearch, dale.selectedTournaments]);
 
-  // Auto re-analyze when period filter changes (both dates filled or both empty)
+  // Auto re-analyze when pre-analysis filters change (bets, period)
   const hasAnalyzedRef = useRef(false);
   useEffect(() => { hasAnalyzedRef.current = hasAnalyzed; }, [hasAnalyzed]);
 
+  const prevBets = useRef(selectedBets);
   const prevDateFrom = useRef(dateFrom);
   const prevDateTo = useRef(dateTo);
 
   useEffect(() => {
-    const changed = prevDateFrom.current !== dateFrom || prevDateTo.current !== dateTo;
+    const betsChanged = prevBets.current !== selectedBets;
+    const dateChanged = prevDateFrom.current !== dateFrom || prevDateTo.current !== dateTo;
+    prevBets.current = selectedBets;
     prevDateFrom.current = dateFrom;
     prevDateTo.current = dateTo;
 
-    if (!hasAnalyzedRef.current || files.length === 0 || !changed) return;
+    if (!hasAnalyzedRef.current || files.length === 0) return;
+    if (!betsChanged && !dateChanged) return;
     if ((dateFrom && !dateTo) || (!dateFrom && dateTo)) return;
 
     const timer = setTimeout(() => { handleAnalyze(); }, 300);
     return () => clearTimeout(timer);
-  }, [dateFrom, dateTo]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [selectedBets, dateFrom, dateTo]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleAnalyze = async () => {
-    if (files.length === 0) return;
+    const toSend = filteredFiles.length > 0 ? filteredFiles : files;
+    if (toSend.length === 0) return;
     setIsAnalyzing(true);
     setError(null);
     try {
-      const data = await analyzeFiles(files, STRATEGY_ID, dateFrom || undefined, dateTo || undefined);
+      const data = await analyzeFiles(toSend, STRATEGY_ID, dateFrom || undefined, dateTo || undefined);
       const rows: ResultRow[] = (data.results ?? []).map(normalizeResult);
       const now = new Date().toLocaleDateString("pt-BR", { day: "2-digit", month: "short", year: "numeric" });
       addAnalysis({ name: files.map((f) => f.name).join(", "), type: "Dale", date: now, duplas: rows.length });
@@ -172,6 +188,7 @@ export function DalePage() {
           results={allResults}
           playerSearch={dale.playerSearch}
           onPlayerSearchChange={(v) => set("playerSearch", v)}
+          availableBets={availableBets}
           selectedBets={dale.selectedBets}
           onSelectedBetsChange={(v) => set("selectedBets", v)}
           selectedTournaments={dale.selectedTournaments}

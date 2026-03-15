@@ -6,7 +6,7 @@ import { AnalysisFilters } from "./AnalysisFilters";
 import { FilterBar } from "./FilterBar";
 import { ResultsTable, type ResultRow } from "./ResultsTable";
 import { PlayerComparisonCard } from "./PlayerComparisonCard";
-import { analyzeFiles, exportFilteredResults, normalizeResult, extractHorariosFromFiles } from "../services/api";
+import { analyzeFiles, exportFilteredResults, normalizeResult, extractHorariosFromFiles, detectBet } from "../services/api";
 import { useSession } from "./SessionContext";
 import type { ColumnDef } from "./ColumnConfigModal";
 
@@ -54,6 +54,19 @@ export function OverUnderPage() {
   const columnConfig = overUnder.columnConfig.length > 0 ? overUnder.columnConfig : buildDefaultColumnConfig(overUnderColumns);
   const visibleColumns = getVisibleColumns(columnConfig, overUnderColumns);
 
+  // Derive available bets from filenames
+  const availableBets = useMemo(() => {
+    const set = new Set<string>();
+    for (const f of files) set.add(detectBet(f.name));
+    return Array.from(set).sort();
+  }, [files]);
+
+  // Files filtered by selected bets (empty = all)
+  const filteredFiles = useMemo(() => {
+    if (selectedBets.length === 0) return files;
+    return files.filter((f) => selectedBets.includes(detectBet(f.name)));
+  }, [files, selectedBets]);
+
   const handleFilesChange = useCallback((newFiles: File[]) => {
     setOverUnder((prev) => ({ ...prev, files: newFiles, availableHorarios: [], selectedHorarios: [] }));
     if (newFiles.length > 0) {
@@ -65,8 +78,6 @@ export function OverUnderPage() {
 
   const filteredResults = useMemo(() => {
     let rows = allResults;
-    if (selectedBets.length > 0)
-      rows = rows.filter((r) => r.fontes.some((f) => selectedBets.includes(f)));
     rows = rows.filter((r) => r.partidas >= minMatches && r.porcentagem >= minPercentage);
     if (overUnder.playerSearch.trim()) {
       const q = overUnder.playerSearch.trim().toLowerCase();
@@ -80,43 +91,44 @@ export function OverUnderPage() {
     if (overUnder.selectedLinhas.length > 0)
       rows = rows.filter((r) => overUnder.selectedLinhas.includes(r.linha));
     return rows;
-  }, [allResults, selectedBets, minMatches, minPercentage, overUnder.playerSearch, overUnder.selectedTournaments, overUnder.selectedLinhas]);
+  }, [allResults, minMatches, minPercentage, overUnder.playerSearch, overUnder.selectedTournaments, overUnder.selectedLinhas]);
 
   // Auto re-analyze when pre-analysis filters change (horarios, period)
   const hasAnalyzedRef = useRef(false);
   useEffect(() => { hasAnalyzedRef.current = hasAnalyzed; }, [hasAnalyzed]);
 
+  const prevBets = useRef(selectedBets);
   const prevHorarios = useRef(overUnder.selectedHorarios);
   const prevDateFrom = useRef(dateFrom);
   const prevDateTo = useRef(dateTo);
 
   useEffect(() => {
+    const betsChanged = prevBets.current !== selectedBets;
     const horariosChanged = prevHorarios.current !== overUnder.selectedHorarios;
-    const dateFromChanged = prevDateFrom.current !== dateFrom;
-    const dateToChanged = prevDateTo.current !== dateTo;
+    const dateChanged = prevDateFrom.current !== dateFrom || prevDateTo.current !== dateTo;
+    prevBets.current = selectedBets;
     prevHorarios.current = overUnder.selectedHorarios;
     prevDateFrom.current = dateFrom;
     prevDateTo.current = dateTo;
 
     if (!hasAnalyzedRef.current || files.length === 0) return;
-    if (!horariosChanged && !dateFromChanged && !dateToChanged) return;
-
-    // Period: only re-analyze if both dates filled or both empty
+    if (!betsChanged && !horariosChanged && !dateChanged) return;
     if ((dateFrom && !dateTo) || (!dateFrom && dateTo)) return;
 
     const timer = setTimeout(() => {
       handleAnalyze();
     }, 300);
     return () => clearTimeout(timer);
-  }, [overUnder.selectedHorarios, dateFrom, dateTo]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [selectedBets, overUnder.selectedHorarios, dateFrom, dateTo]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleAnalyze = async () => {
-    if (files.length === 0) return;
+    const toSend = filteredFiles.length > 0 ? filteredFiles : files;
+    if (toSend.length === 0) return;
     setIsAnalyzing(true);
     setError(null);
     try {
       const data = await analyzeFiles(
-        files, STRATEGY_ID,
+        toSend, STRATEGY_ID,
         dateFrom || undefined, dateTo || undefined,
         overUnder.selectedHorarios.length > 0 ? overUnder.selectedHorarios : undefined
       );
@@ -198,6 +210,7 @@ export function OverUnderPage() {
           results={allResults}
           playerSearch={overUnder.playerSearch}
           onPlayerSearchChange={(v) => set("playerSearch", v)}
+          availableBets={availableBets}
           selectedBets={overUnder.selectedBets}
           onSelectedBetsChange={(v) => set("selectedBets", v)}
           selectedTournaments={overUnder.selectedTournaments}

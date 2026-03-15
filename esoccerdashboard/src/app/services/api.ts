@@ -1,6 +1,19 @@
 import * as XLSX from "xlsx";
 import type { ResultRow } from "../components/ResultsTable";
 
+const BET_PATTERNS: [string, string][] = [
+  ["BETANO", "Betano"],
+  ["365", "365"],
+  ["SUPER", "Super"],
+];
+export function detectBet(filename: string): string {
+  const upper = filename.toUpperCase();
+  for (const [pattern, label] of BET_PATTERNS) {
+    if (upper.includes(pattern)) return label;
+  }
+  return filename.replace(/\.[^.]+$/, "");
+}
+
 const BASE_URL = import.meta.env.VITE_API_BASE_URL as string;
 const API_KEY = import.meta.env.VITE_API_KEY as string;
 

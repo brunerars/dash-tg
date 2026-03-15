@@ -23,17 +23,19 @@ self.onmessage = async (e: MessageEvent<ArrayBuffer[]>) => {
       }
       if (colIdx === -1) continue;
 
-      // Read only that column
+      // Read only that column — extract minute part only (MM:SS → MM)
       for (let r = 1; r <= range.e.r; r++) {
         const cell = ws[XLSX.utils.encode_cell({ r, c: colIdx })];
         if (!cell) continue;
         const val = cell.w ?? String(cell.v);
-        if (val && val.trim()) allValues.add(val.trim());
+        if (!val || !val.trim()) continue;
+        const minute = parseInt(val.trim().split(":")[0], 10);
+        if (!isNaN(minute)) allValues.add(String(minute));
       }
     } catch {
       // skip unreadable files
     }
   }
 
-  self.postMessage(Array.from(allValues).sort());
+  self.postMessage(Array.from(allValues).sort((a, b) => Number(a) - Number(b)));
 };

@@ -80,15 +80,17 @@ async def _analyze_with_strategy(
             load_result = LoadResult(df=df, total_jogos_brutos=len(df))
 
         # 1c. Capturar valores únicos de "Horario Jogo" (tempo da partida FIFA)
+        # 1c. Capturar minutos únicos de "Horario Jogo" (MM:SS → minuto)
+        # Valores como "05:04" são parseados como time(5,4) — .hour dá o minuto do jogo
         horarios_unicos: list[str] = []
         if "Horario Jogo" in df.columns and not df.empty:
-            unique_vals = df["Horario Jogo"].dropna().unique()
-            horarios_unicos = sorted(set(str(v) for v in unique_vals))
+            minutes = df["Horario Jogo"].dropna().apply(lambda t: t.hour)
+            horarios_unicos = sorted(set(str(m) for m in minutes), key=lambda x: int(x))
 
-        # 1d. Filtrar por horários selecionados (se informado)
+        # 1d. Filtrar por minutos de jogo selecionados
         if horarios and "Horario Jogo" in df.columns:
-            parsed_horarios = [time_type.fromisoformat(h) for h in horarios]
-            df = df[df["Horario Jogo"].isin(parsed_horarios)]
+            parsed_minutes = [int(h) for h in horarios]
+            df = df[df["Horario Jogo"].apply(lambda t: t.hour).isin(parsed_minutes)]
             if df.empty:
                 raise HTTPException(
                     status_code=422,
@@ -213,11 +215,11 @@ async def analyze(
         horarios_list = [h.strip() for h in horarios.split(",") if h.strip()]
         for h in horarios_list:
             try:
-                time_type.fromisoformat(h)
+                int(h)
             except ValueError:
                 raise HTTPException(
                     status_code=422,
-                    detail=f"Horário inválido: '{h}'. Use o formato HH:MM:SS.",
+                    detail=f"Horário inválido: '{h}'. Use o minuto do jogo (ex: 0, 1, 2, 5).",
                 )
 
     filenames = [uf.filename or "arquivo.xlsx" for uf in files]
