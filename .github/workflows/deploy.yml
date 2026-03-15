@@ -1,4 +1,4 @@
-name: CI/CD — eSoccer Dashboard (API + Frontend)
+name: CI/CD — Build Images (API + Frontend)
 
 on:
   push:
@@ -11,7 +11,7 @@ env:
   IMAGE_FRONTEND: ghcr.io/${{ github.repository }}/frontend
 
 concurrency:
-  group: deploy-esoccer-${{ github.ref }}
+  group: build-esoccer-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -87,65 +87,9 @@ jobs:
           mv /tmp/.buildx-cache-api-new /tmp/.buildx-cache-api
           mv /tmp/.buildx-cache-frontend-new /tmp/.buildx-cache-frontend
 
-  deploy:
-    name: Deploy to VPS
-    runs-on: ubuntu-latest
-    needs: build
-    permissions:
-      contents: read
-      packages: read
-
-    steps:
-      - name: Validar secrets de deploy
-        shell: bash
+      - name: Resumo
         run: |
-          if [ -z "${{ secrets.VPS_HOST }}" ] || [ -z "${{ secrets.VPS_USER }}" ] || [ -z "${{ secrets.VPS_SSH_KEY }}" ]; then
-            echo "Secrets de deploy ausentes (VPS_HOST, VPS_USER, VPS_SSH_KEY)"
-            exit 1
-          fi
-
-      - name: Deploy via SSH
-        uses: appleboy/ssh-action@v1
-        with:
-          host: ${{ secrets.VPS_HOST }}
-          username: ${{ secrets.VPS_USER }}
-          key: ${{ secrets.VPS_SSH_KEY }}
-          timeout: 60s
-          command_timeout: 5m
-          script: |
-            set -e
-
-            IMAGE_API="${{ env.IMAGE_API }}"
-            IMAGE_FRONTEND="${{ env.IMAGE_FRONTEND }}"
-            STACK="api-esoccer"
-
-            echo "🔐 Login no registry..."
-            echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
-
-            echo "📦 Pulling imagens..."
-            docker pull "${IMAGE_API}:latest"
-            docker pull "${IMAGE_FRONTEND}:latest"
-
-            echo "📋 Serviços disponíveis na stack:"
-            docker service ls --format '{{.Name}}' | grep "^${STACK}_" || echo "(nenhum)"
-
-            # --- API ---
-            if docker service inspect "${STACK}_api" >/dev/null 2>&1; then
-              echo "🚀 Atualizando ${STACK}_api..."
-              docker service update --image "${IMAGE_API}:latest" --with-registry-auth --force "${STACK}_api"
-            else
-              echo "⚠️  Serviço ${STACK}_api não encontrado."
-            fi
-
-            # --- Frontend ---
-            if docker service inspect "${STACK}_frontend" >/dev/null 2>&1; then
-              echo "🚀 Atualizando ${STACK}_frontend..."
-              docker service update --image "${IMAGE_FRONTEND}:latest" --with-registry-auth --force "${STACK}_frontend"
-            else
-              echo "⚠️  Serviço ${STACK}_frontend não encontrado. Redeploy a stack no Portainer."
-            fi
-
-            echo "🧹 Limpando imagens antigas..."
-            docker image prune -f
-
-            echo "✅ Deploy concluído!"
+          echo "✅ Imagens publicadas:"
+          echo "   API:      ${{ env.IMAGE_API }}:latest"
+          echo "   Frontend: ${{ env.IMAGE_FRONTEND }}:latest"
+          echo "   Tag:      ${{ steps.meta.outputs.short_sha }}"
