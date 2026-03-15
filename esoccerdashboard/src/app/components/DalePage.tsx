@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useEffect, useRef } from "react";
 import { Zap, Download } from "lucide-react";
 import { FileUploadCard } from "./FileUploadCard";
 import { PeriodFilterCard } from "./PeriodFilterCard";
@@ -46,7 +46,7 @@ export function DalePage() {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const { files, results: allResults, cacheKey, hasAnalyzed, selectedBet, minMatches, minPercentage, dateFrom, dateTo } = dale;
+  const { files, results: allResults, cacheKey, hasAnalyzed, selectedBets, minMatches, minPercentage, dateFrom, dateTo } = dale;
 
   const set = <K extends keyof typeof dale>(key: K, value: typeof dale[K]) =>
     setDale((prev) => ({ ...prev, [key]: value }));
@@ -56,8 +56,8 @@ export function DalePage() {
 
   const filteredResults = useMemo(() => {
     let rows = allResults;
-    if (selectedBet !== "all")
-      rows = rows.filter((r) => r.fontes.includes(selectedBet));
+    if (selectedBets.length > 0)
+      rows = rows.filter((r) => r.fontes.some((f) => selectedBets.includes(f)));
     rows = rows.filter((r) => r.partidas >= minMatches && r.porcentagem >= minPercentage);
     if (dale.playerSearch.trim()) {
       const q = dale.playerSearch.trim().toLowerCase();
@@ -69,7 +69,26 @@ export function DalePage() {
         return dale.selectedTournaments.some((t) => leagues.includes(t));
       });
     return rows;
-  }, [allResults, selectedBet, minMatches, minPercentage, dale.playerSearch, dale.selectedTournaments]);
+  }, [allResults, selectedBets, minMatches, minPercentage, dale.playerSearch, dale.selectedTournaments]);
+
+  // Auto re-analyze when period filter changes (both dates filled or both empty)
+  const hasAnalyzedRef = useRef(false);
+  useEffect(() => { hasAnalyzedRef.current = hasAnalyzed; }, [hasAnalyzed]);
+
+  const prevDateFrom = useRef(dateFrom);
+  const prevDateTo = useRef(dateTo);
+
+  useEffect(() => {
+    const changed = prevDateFrom.current !== dateFrom || prevDateTo.current !== dateTo;
+    prevDateFrom.current = dateFrom;
+    prevDateTo.current = dateTo;
+
+    if (!hasAnalyzedRef.current || files.length === 0 || !changed) return;
+    if ((dateFrom && !dateTo) || (!dateFrom && dateTo)) return;
+
+    const timer = setTimeout(() => { handleAnalyze(); }, 300);
+    return () => clearTimeout(timer);
+  }, [dateFrom, dateTo]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleAnalyze = async () => {
     if (files.length === 0) return;
@@ -153,8 +172,8 @@ export function DalePage() {
           results={allResults}
           playerSearch={dale.playerSearch}
           onPlayerSearchChange={(v) => set("playerSearch", v)}
-          selectedBet={dale.selectedBet}
-          onSelectedBetChange={(v) => set("selectedBet", v)}
+          selectedBets={dale.selectedBets}
+          onSelectedBetsChange={(v) => set("selectedBets", v)}
           selectedTournaments={dale.selectedTournaments}
           onSelectedTournamentsChange={(v) => set("selectedTournaments", v)}
           minMatches={dale.minMatches}

@@ -163,10 +163,14 @@ export function BlueprintPage() {
                       const isResultado = col === "Resultado";
                       const isGreen = isResultado && String(val).toUpperCase() === "GREEN";
                       const isRed = isResultado && String(val).toUpperCase() === "RED";
-                      // Format Data column to just date
+                      // Format Data column to BR format (DD/MM/YYYY)
                       let display = val != null ? String(val) : "\u2014";
-                      if (col === "Data" && typeof val === "string" && val.includes("T")) {
-                        display = val.split("T")[0];
+                      if (col === "Data" && typeof val === "string") {
+                        const iso = val.includes("T") ? val.split("T")[0] : val;
+                        const parts = iso.split("-");
+                        if (parts.length === 3) {
+                          display = `${parts[2]}/${parts[1]}/${parts[0]}`;
+                        }
                       }
                       return (
                         <td

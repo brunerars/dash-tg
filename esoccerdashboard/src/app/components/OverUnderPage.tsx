@@ -1,4 +1,4 @@
-import { useMemo, useState, useCallback } from "react";
+import { useMemo, useState, useCallback, useEffect, useRef } from "react";
 import { TrendingUp, Download } from "lucide-react";
 import { FileUploadCard } from "./FileUploadCard";
 import { PeriodFilterCard } from "./PeriodFilterCard";
@@ -46,7 +46,7 @@ export function OverUnderPage() {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const { files, results: allResults, cacheKey, hasAnalyzed, selectedBet, minMatches, minPercentage, dateFrom, dateTo } = overUnder;
+  const { files, results: allResults, cacheKey, hasAnalyzed, selectedBets, minMatches, minPercentage, dateFrom, dateTo } = overUnder;
 
   const set = <K extends keyof typeof overUnder>(key: K, value: typeof overUnder[K]) =>
     setOverUnder((prev) => ({ ...prev, [key]: value }));
@@ -65,8 +65,8 @@ export function OverUnderPage() {
 
   const filteredResults = useMemo(() => {
     let rows = allResults;
-    if (selectedBet !== "all")
-      rows = rows.filter((r) => r.fontes.includes(selectedBet));
+    if (selectedBets.length > 0)
+      rows = rows.filter((r) => r.fontes.some((f) => selectedBets.includes(f)));
     rows = rows.filter((r) => r.partidas >= minMatches && r.porcentagem >= minPercentage);
     if (overUnder.playerSearch.trim()) {
       const q = overUnder.playerSearch.trim().toLowerCase();
@@ -80,7 +80,35 @@ export function OverUnderPage() {
     if (overUnder.selectedLinhas.length > 0)
       rows = rows.filter((r) => overUnder.selectedLinhas.includes(r.linha));
     return rows;
-  }, [allResults, selectedBet, minMatches, minPercentage, overUnder.playerSearch, overUnder.selectedTournaments, overUnder.selectedLinhas]);
+  }, [allResults, selectedBets, minMatches, minPercentage, overUnder.playerSearch, overUnder.selectedTournaments, overUnder.selectedLinhas]);
+
+  // Auto re-analyze when pre-analysis filters change (horarios, period)
+  const hasAnalyzedRef = useRef(false);
+  useEffect(() => { hasAnalyzedRef.current = hasAnalyzed; }, [hasAnalyzed]);
+
+  const prevHorarios = useRef(overUnder.selectedHorarios);
+  const prevDateFrom = useRef(dateFrom);
+  const prevDateTo = useRef(dateTo);
+
+  useEffect(() => {
+    const horariosChanged = prevHorarios.current !== overUnder.selectedHorarios;
+    const dateFromChanged = prevDateFrom.current !== dateFrom;
+    const dateToChanged = prevDateTo.current !== dateTo;
+    prevHorarios.current = overUnder.selectedHorarios;
+    prevDateFrom.current = dateFrom;
+    prevDateTo.current = dateTo;
+
+    if (!hasAnalyzedRef.current || files.length === 0) return;
+    if (!horariosChanged && !dateFromChanged && !dateToChanged) return;
+
+    // Period: only re-analyze if both dates filled or both empty
+    if ((dateFrom && !dateTo) || (!dateFrom && dateTo)) return;
+
+    const timer = setTimeout(() => {
+      handleAnalyze();
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [overUnder.selectedHorarios, dateFrom, dateTo]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleAnalyze = async () => {
     if (files.length === 0) return;
@@ -170,8 +198,8 @@ export function OverUnderPage() {
           results={allResults}
           playerSearch={overUnder.playerSearch}
           onPlayerSearchChange={(v) => set("playerSearch", v)}
-          selectedBet={overUnder.selectedBet}
-          onSelectedBetChange={(v) => set("selectedBet", v)}
+          selectedBets={overUnder.selectedBets}
+          onSelectedBetsChange={(v) => set("selectedBets", v)}
           selectedTournaments={overUnder.selectedTournaments}
           onSelectedTournamentsChange={(v) => set("selectedTournaments", v)}
           minMatches={overUnder.minMatches}

@@ -17,7 +17,7 @@ export interface PageState {
   totalJogosBrutos: number;
   totalJogosAposDedup: number;
   hasAnalyzed: boolean;
-  selectedBet: string;
+  selectedBets: string[];
   minMatches: number;
   minPercentage: number;
   dateFrom: string;
@@ -37,7 +37,7 @@ export const defaultPageState: PageState = {
   totalJogosBrutos: 0,
   totalJogosAposDedup: 0,
   hasAnalyzed: false,
-  selectedBet: "all",
+  selectedBets: [],
   minMatches: 10,
   minPercentage: 50,
   dateFrom: "",

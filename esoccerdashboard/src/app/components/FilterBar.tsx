@@ -7,8 +7,8 @@ interface FilterBarProps {
   results: ResultRow[];
   playerSearch: string;
   onPlayerSearchChange: (v: string) => void;
-  selectedBet: string;
-  onSelectedBetChange: (v: string) => void;
+  selectedBets: string[];
+  onSelectedBetsChange: (v: string[]) => void;
   selectedTournaments: string[];
   onSelectedTournamentsChange: (v: string[]) => void;
   minMatches: number;
@@ -28,8 +28,8 @@ export function FilterBar({
   results,
   playerSearch,
   onPlayerSearchChange,
-  selectedBet,
-  onSelectedBetChange,
+  selectedBets,
+  onSelectedBetsChange,
   selectedTournaments,
   onSelectedTournamentsChange,
   minMatches,
@@ -99,6 +99,14 @@ export function FilterBar({
     return () => document.removeEventListener("mousedown", handler);
   }, []);
 
+  const toggleBet = (bet: string) => {
+    if (selectedBets.includes(bet)) {
+      onSelectedBetsChange(selectedBets.filter((b) => b !== bet));
+    } else {
+      onSelectedBetsChange([...selectedBets, bet]);
+    }
+  };
+
   const toggleTournament = (league: string) => {
     if (selectedTournaments.includes(league)) {
       onSelectedTournamentsChange(selectedTournaments.filter((t) => t !== league));
@@ -161,7 +169,6 @@ export function FilterBar({
     boxShadow: isDark ? "0 8px 24px rgba(0,0,0,0.6)" : "0 4px 16px rgba(0,0,0,0.12)",
   };
 
-  const betLabel = selectedBet === "all" ? "Todas" : selectedBet;
   const gridCols = hasLinhaFilter ? "1fr 1fr 1fr 1fr" : "1fr 1fr 1fr";
 
   // Row 2 columns: Min.Part + (Horário Jogo if available) + Green%
@@ -193,7 +200,7 @@ export function FilterBar({
         </div>
 
         {/* Row 1, Col 2: Bet */}
-        <MultiSelectDropdown
+        <CheckboxDropdown
           icon={<Filter className="w-3.5 h-3.5 shrink-0" style={{ color: "#ea580c" }} />}
           label="Bet"
           labelStyle={labelStyle}
@@ -205,16 +212,12 @@ export function FilterBar({
           isOpen={betOpen}
           setIsOpen={setBetOpen}
           containerRef={betRef}
-          mode="single"
-          displayValue={betLabel}
-          showClear={selectedBet !== "all"}
-          onClear={() => onSelectedBetChange("all")}
-        >
-          <DropdownItem label="Todas" selected={selectedBet === "all"} hoverBg={hoverBg} color={inputColor} onClick={() => { onSelectedBetChange("all"); setBetOpen(false); }} />
-          {allBets.map((bet) => (
-            <DropdownItem key={bet} label={bet} selected={selectedBet === bet} hoverBg={hoverBg} color={inputColor} onClick={() => { onSelectedBetChange(bet); setBetOpen(false); }} />
-          ))}
-        </MultiSelectDropdown>
+          items={allBets}
+          selected={selectedBets}
+          onToggle={toggleBet}
+          onClear={() => onSelectedBetsChange([])}
+          emptyLabel="Todas"
+        />
 
         {/* Row 1, Col 3: Tournament */}
         <CheckboxDropdown
