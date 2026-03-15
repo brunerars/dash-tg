@@ -19,7 +19,7 @@ services:
       labels:
         - traefik.enable=true
         - traefik.docker.network=network_public
-        - traefik.http.routers.api_esoccer.rule=Host(`api-esoccer.arvsystems.cloud`)
+        - traefik.http.routers.api_esoccer.rule=Host(`api-tg-esoccer.arvsystems.cloud`)
         - traefik.http.routers.api_esoccer.entrypoints=websecure
         - traefik.http.routers.api_esoccer.tls.certresolver=letsencryptresolver
         - traefik.http.services.api_esoccer.loadbalancer.server.port=8000
