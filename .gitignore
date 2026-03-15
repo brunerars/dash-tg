@@ -1,5 +1,7 @@
 Data/
+data/
 *.xlsx
+*.png
 
 # Python
 .venv/
@@ -8,6 +10,16 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+
+# Node / Frontend
+esoccerdashboard/node_modules/
+esoccerdashboard/dist/
+esoccerdashboard/.cache/
+
+# Env (keep .env.example and .env.prod)
+.env
+!.env.example
+!.env.prod
 
 # Streamlit
 .streamlit/secrets.toml
@@ -21,3 +33,8 @@ Thumbs.db
 dist/
 build/
 *.log
+
+# Local dev
+api-dash-tg/
+.claude/
+alteracoes.txt

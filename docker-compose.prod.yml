@@ -2,7 +2,7 @@ version: "3.8"
 
 services:
   api:
-    image: ${IMAGE}:latest
+    image: ${IMAGE_API}:latest
     environment:
       - API_KEYS=${API_KEYS}
       - REDIS_URL=redis://redis:6379
@@ -23,6 +23,22 @@ services:
         - traefik.http.routers.api_esoccer.entrypoints=websecure
         - traefik.http.routers.api_esoccer.tls.certresolver=letsencryptresolver
         - traefik.http.services.api_esoccer.loadbalancer.server.port=8000
+
+  frontend:
+    image: ${IMAGE_FRONTEND}:latest
+    networks:
+      - network_public
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+      labels:
+        - traefik.enable=true
+        - traefik.docker.network=network_public
+        - traefik.http.routers.esoccer_dash.rule=Host(`esoccer.arvsystems.cloud`)
+        - traefik.http.routers.esoccer_dash.entrypoints=websecure
+        - traefik.http.routers.esoccer_dash.tls.certresolver=letsencryptresolver
+        - traefik.http.services.esoccer_dash.loadbalancer.server.port=80
 
   redis:
     image: redis:7-alpine

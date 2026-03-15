@@ -1,0 +1,210 @@
+@import './fonts.css';
+@import './tailwind.css';
+@import './theme.css';
+
+/* ── Scrollbar ── */
+::-webkit-scrollbar {
+  width: 5px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--background);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--primary);
+}
+
+/* ── Custom range slider ── */
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 18px;
+  height: 18px;
+  background: var(--primary);
+  border-radius: 50%;
+  cursor: pointer;
+  border: 2px solid var(--background);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 20%, transparent);
+}
+
+input[type="range"]::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  background: var(--primary);
+  border-radius: 50%;
+  cursor: pointer;
+  border: 2px solid var(--background);
+}
+
+/* ── Liquid blob animation ── */
+@keyframes float-blob {
+  0% {
+    transform: translate(0, 0) scale(1);
+  }
+
+  100% {
+    transform: translate(25px, 40px) scale(1.1);
+  }
+}
+
+.liquid-blob {
+  position: fixed;
+  border-radius: 50%;
+  filter: blur(80px);
+  pointer-events: none;
+  animation: float-blob 14s infinite alternate cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* ── Glass card panels — Light mode ── */
+.rounded-xl.bg-card,
+.rounded-2xl.bg-card {
+  border: 1px solid rgba(0, 0, 0, 0.08) !important;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.06), 0 1px 3px rgba(0, 0, 0, 0.04);
+  position: relative;
+  overflow: hidden;
+  transition: all 0.3s ease;
+}
+
+.rounded-xl.bg-card:hover,
+.rounded-2xl.bg-card:hover {
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.1), 0 2px 6px rgba(0, 0, 0, 0.06);
+  transform: translateY(-1px);
+}
+
+/* ── Glass card panels — Dark mode ── */
+.dark .rounded-xl.bg-card,
+.dark .rounded-2xl.bg-card {
+  backdrop-filter: blur(12px) saturate(160%);
+  -webkit-backdrop-filter: blur(12px) saturate(160%);
+  border-top: 1px solid rgba(255, 255, 255, 0.08) !important;
+  border-left: 1px solid rgba(255, 255, 255, 0.05) !important;
+  border-right: 1px solid rgba(255, 255, 255, 0.05) !important;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05) !important;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.4), inset 0 0 14px rgba(234, 88, 12, 0.04);
+}
+
+/* Shimmer sweep on hover - dark mode only */
+.dark .rounded-xl.bg-card::before,
+.dark .rounded-2xl.bg-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(234, 88, 12, 0.03), transparent);
+  transition: left 0.5s ease;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.dark .rounded-xl.bg-card:hover,
+.dark .rounded-2xl.bg-card:hover {
+  border-top-color: rgba(234, 88, 12, 0.15) !important;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5), inset 0 0 14px rgba(234, 88, 12, 0.08);
+  transform: translateY(-2px);
+}
+
+.dark .rounded-xl.bg-card:hover::before,
+.dark .rounded-2xl.bg-card:hover::before {
+  left: 100%;
+  transition: left 0.7s ease-in-out;
+}
+
+/* ── Layrinth border-sweep button ── */
+.btn-layrinth {
+  position: relative;
+  overflow: hidden;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 20px;
+  border-radius: 10px;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--muted-foreground);
+  font-family: 'Space Grotesk', 'Inter', sans-serif;
+  font-size: 0.875rem;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  cursor: pointer;
+  transition: color 0.25s, border-color 0.25s, background 0.25s;
+}
+
+.btn-layrinth:hover {
+  border-color: var(--foreground);
+  color: var(--foreground);
+  background: var(--secondary);
+}
+
+/* Sweep effect — dark mode only */
+.dark .btn-layrinth::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #ea580c, rgba(234, 88, 12, 0));
+  opacity: 0;
+  transform: translateX(-100%);
+  transition: transform 0.4s ease, opacity 0.4s ease;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.dark .btn-layrinth:hover::after {
+  transform: translateX(0);
+  opacity: 0.15;
+}
+
+.dark .btn-layrinth:hover {
+  border-color: #ea580c;
+  color: #ea580c;
+  background: transparent;
+}
+
+.btn-layrinth>* {
+  position: relative;
+  z-index: 1;
+}
+
+/* Primary button — Light mode */
+.btn-layrinth-primary {
+  background: linear-gradient(135deg, #2d2d2d, #0a0a0a);
+  border: 1px solid #0a0a0a;
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.btn-layrinth-primary:hover {
+  background: #262626;
+  border-color: #262626;
+  color: #ffffff;
+}
+
+/* Primary button — Dark mode */
+.dark .btn-layrinth-primary {
+  background: #ea580c;
+  border-color: #ea580c;
+  color: #ffffff;
+}
+
+.dark .btn-layrinth-primary:hover {
+  background: #f97316;
+  border-color: #f97316;
+  color: #ffffff;
+}
+
+.btn-layrinth-primary::after {
+  display: none;
+}
+
+.btn-layrinth:disabled,
+.btn-layrinth-primary:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}

@@ -103,8 +103,14 @@ def load_tips_enviadas(files: Iterable[UploadedLike]) -> LoadResult:
         df = _normalize_columns(df)
         _ensure_required_columns(df, source_name)
 
-        # Manter colunas obrigatórias + opcionais presentes (ex: "Linha" para Over/HT)
-        _optional = [c for c in ("Linha",) if c in df.columns]
+        # Manter colunas obrigatórias + opcionais presentes (ex: "Linha" para Over/HT, "Horario Jogo")
+        # Normalizar variantes com/sem acento
+        _col_renames = {}
+        if "Horário Jogo" in df.columns and "Horario Jogo" not in df.columns:
+            _col_renames["Horário Jogo"] = "Horario Jogo"
+        if _col_renames:
+            df = df.rename(columns=_col_renames)
+        _optional = [c for c in ("Linha", "Horario Jogo") if c in df.columns]
         df = df.loc[:, list(REQUIRED_COLUMNS) + _optional].copy()
         df["__source_file"] = source_name
         df["__bet"] = _detect_bet(source_name)
@@ -112,6 +118,9 @@ def load_tips_enviadas(files: Iterable[UploadedLike]) -> LoadResult:
         df["Data"] = _parse_date_series(df["Data"])
         df["Hora"] = _parse_time_series(df["Hora"])
         df["DataHora"] = _parse_datetime_series(df["Data"], df["Hora"])
+
+        if "Horario Jogo" in df.columns:
+            df["Horario Jogo"] = _parse_time_series(df["Horario Jogo"])
 
         df["Lucro/Prej."] = _parse_lucro_series(df["Lucro/Prej."])
         df["Resultado"] = _normalize_resultado_series(df["Resultado"])

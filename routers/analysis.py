@@ -1,26 +1,27 @@
 from __future__ import annotations
 
 import io
-from pathlib import Path
+import json
+from datetime import date as date_type, time as time_type
 from typing import Annotated
 
 import pandas as pd
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
 
-from config.settings import DATA_DIR
 from config.strategies import ESTRATEGIAS, get_strategy_internal
 from esoccer_dashboard.services.cache import (
     delete_cache_key,
     gerar_cache_key,
+    get_blueprint,
     get_cache_stats,
     get_export,
     get_or_compute,
+    store_blueprint,
     store_export,
 )
 from esoccer_dashboard.services.deduplicator import deduplicate_clusters
-from esoccer_dashboard.services.loader import load_tips_enviadas
+from esoccer_dashboard.services.loader import LoadResult, load_tips_enviadas
 from esoccer_dashboard.services.metrics import compute_metrics
 from esoccer_dashboard.services.normalizer import add_dupla_normalizada
 from middleware.auth import verify_api_key
@@ -48,17 +49,53 @@ class _UploadFileAdapter:
 async def _analyze_with_strategy(
     strategy_name: str,
     files_contents: list[tuple[str, bytes]],
+    date_from: str | None = None,
+    date_to: str | None = None,
+    horarios: list[str] | None = None,
 ) -> dict:
     estrategia = get_strategy_internal(strategy_name)  # garantido válido pelo chamador
 
     files_bytes = [c for _, c in files_contents]
-    cache_key = gerar_cache_key(files_bytes, strategy_name)
+    cache_key = gerar_cache_key(files_bytes, strategy_name, date_from, date_to, horarios)
 
     def compute() -> dict:
         adapters = [_UploadFileAdapter(name, content) for name, content in files_contents]
 
         # 1. Carregar
         load_result = load_tips_enviadas(adapters)
+        df = load_result.df
+
+        # 1b. Filtrar por período (se informado) — antes da normalização e dedup
+        if date_from or date_to:
+            if date_from:
+                df = df[df["Data"] >= date_type.fromisoformat(date_from)]
+            if date_to:
+                df = df[df["Data"] <= date_type.fromisoformat(date_to)]
+            if df.empty:
+                raise HTTPException(
+                    status_code=422,
+                    detail="Nenhum jogo encontrado no período especificado.",
+                )
+            df = df.reset_index(drop=True)
+            load_result = LoadResult(df=df, total_jogos_brutos=len(df))
+
+        # 1c. Capturar valores únicos de "Horario Jogo" (tempo da partida FIFA)
+        horarios_unicos: list[str] = []
+        if "Horario Jogo" in df.columns and not df.empty:
+            unique_vals = df["Horario Jogo"].dropna().unique()
+            horarios_unicos = sorted(set(str(v) for v in unique_vals))
+
+        # 1d. Filtrar por horários selecionados (se informado)
+        if horarios and "Horario Jogo" in df.columns:
+            parsed_horarios = [time_type.fromisoformat(h) for h in horarios]
+            df = df[df["Horario Jogo"].isin(parsed_horarios)]
+            if df.empty:
+                raise HTTPException(
+                    status_code=422,
+                    detail="Nenhum jogo encontrado nos horários selecionados.",
+                )
+            df = df.reset_index(drop=True)
+            load_result = LoadResult(df=df, total_jogos_brutos=len(df))
 
         # 2. Normalizar dupla
         df = add_dupla_normalizada(load_result.df)
@@ -68,6 +105,10 @@ async def _analyze_with_strategy(
             df,
             dedup_key=estrategia["dedup_key_internal"],
         )
+
+        # 3b. Armazenar dados de blueprint (dedup df completo para auditoria)
+        dedup_json = dedup_result.df.to_json(orient="records", date_format="iso", default_handler=str)
+        store_blueprint(cache_key, dedup_json)
 
         # 4. Calcular métricas — usando group_by e janela_horas da estratégia
         metrics_result = compute_metrics(
@@ -94,13 +135,20 @@ async def _analyze_with_strategy(
         # 7. Gerar e armazenar xlsx para export
         _store_xlsx(mdf, cache_key)
 
-        return {
+        result: dict = {
             "cache_key": cache_key,
             "strategy": strategy_name,
             "total_jogos_brutos": load_result.total_jogos_brutos,
             "total_jogos_apos_dedup": dedup_result.total_jogos_apos_dedup,
             "duplas": duplas,
         }
+        if date_from:
+            result["date_from"] = date_from
+        if date_to:
+            result["date_to"] = date_to
+        if horarios_unicos:
+            result["horarios_unicos"] = horarios_unicos
+        return result
 
     result, cache_hit = get_or_compute(cache_key, compute)
     result["cache_hit"] = cache_hit
@@ -110,8 +158,10 @@ async def _analyze_with_strategy(
 # ---------------------------------------------------------------------------
 # GET /strategies
 # ---------------------------------------------------------------------------
-@router.get("/strategies")
+@router.get("/strategies", tags=["análise"], summary="Listar estratégias disponíveis")
 def list_strategies() -> dict:
+    """Retorna as estratégias configuradas com seus parâmetros principais (`min_jogos`, `min_green_pct`).
+    Use o campo `id` como valor do campo `strategy` no `/analyze`."""
     return {
         "strategies": [
             {
@@ -128,11 +178,19 @@ def list_strategies() -> dict:
 # ---------------------------------------------------------------------------
 # POST /analyze  (upload de arquivos)
 # ---------------------------------------------------------------------------
-@router.post("/analyze")
+@router.post(
+    "/analyze",
+    tags=["análise"],
+    summary="Analisar arquivos (upload)",
+    response_description="Métricas calculadas por dupla, com `cache_key` para export posterior.",
+)
 async def analyze(
     _key: AuthDep,
     files: list[UploadFile] = File(...),
     strategy: str = Form(...),
+    date_from: str | None = Form(None, description="Data inicial do período (YYYY-MM-DD). Opcional."),
+    date_to: str | None = Form(None, description="Data final do período (YYYY-MM-DD). Opcional."),
+    horarios: str | None = Form(None, description="Horários de jogo selecionados, separados por vírgula (HH:MM:SS). Opcional."),
 ) -> dict:
     if get_strategy_internal(strategy) is None:
         raise HTTPException(
@@ -140,50 +198,44 @@ async def analyze(
             detail=f"Estratégia '{strategy}' não encontrada. Use GET /strategies para listar as disponíveis.",
         )
 
+    for label, value in (("date_from", date_from), ("date_to", date_to)):
+        if value is not None:
+            try:
+                date_type.fromisoformat(value)
+            except ValueError:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"'{label}' inválido: '{value}'. Use o formato YYYY-MM-DD.",
+                )
+
+    horarios_list: list[str] | None = None
+    if horarios:
+        horarios_list = [h.strip() for h in horarios.split(",") if h.strip()]
+        for h in horarios_list:
+            try:
+                time_type.fromisoformat(h)
+            except ValueError:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Horário inválido: '{h}'. Use o formato HH:MM:SS.",
+                )
+
+    filenames = [uf.filename or "arquivo.xlsx" for uf in files]
+    seen = set()
+    duplicates = [f for f in filenames if f in seen or seen.add(f)]
+    if duplicates:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Arquivos com nome repetido não são permitidos: {duplicates}",
+        )
+
     files_contents: list[tuple[str, bytes]] = []
     for uf in files:
         content = await uf.read()
         files_contents.append((uf.filename or "arquivo.xlsx", content))
 
-    return await _analyze_with_strategy(strategy, files_contents)
+    return await _analyze_with_strategy(strategy, files_contents, date_from, date_to, horarios_list)
 
-
-# ---------------------------------------------------------------------------
-# POST /analyze/default  (usa arquivos pré-carregados no servidor)
-# ---------------------------------------------------------------------------
-class DefaultAnalyzeRequest(BaseModel):
-    strategy: str
-
-
-@router.post("/analyze/default")
-async def analyze_default(_key: AuthDep, body: DefaultAnalyzeRequest) -> dict:
-    """
-    Analisa usando os arquivos .xlsx pré-carregados no servidor.
-    Os arquivos ficam em DATA_DIR/<slug>/ (ex: /app/data/esoccer/).
-    Não requer upload — ideal para o frontend durante o desenvolvimento.
-    """
-    estrategia = get_strategy_internal(body.strategy)
-    if estrategia is None:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Estratégia '{body.strategy}' não encontrada. Use GET /strategies para listar as disponíveis.",
-        )
-
-    slug = estrategia["slug"]
-    data_path = Path(DATA_DIR) / slug
-    xlsx_files = sorted(data_path.glob("*.xlsx"))
-
-    if not xlsx_files:
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                f"Nenhum arquivo .xlsx encontrado em '{data_path}'. "
-                f"Copie os arquivos para DATA_DIR/{slug}/ no servidor."
-            ),
-        )
-
-    files_contents = [(p.name, p.read_bytes()) for p in xlsx_files]
-    return await _analyze_with_strategy(body.strategy, files_contents)
 
 
 def _store_xlsx(df: pd.DataFrame, cache_key: str) -> None:
@@ -194,10 +246,49 @@ def _store_xlsx(df: pd.DataFrame, cache_key: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# GET /blueprint/{cache_key}
+# ---------------------------------------------------------------------------
+@router.get("/blueprint/{cache_key}", tags=["blueprint"], summary="Dados detalhados (blueprint) de uma dupla")
+def get_blueprint_data(
+    _key: AuthDep,
+    cache_key: str,
+    dupla: str,
+    linha: str | None = None,
+) -> dict:
+    """Retorna os jogos individuais de uma dupla para auditoria.
+    O `cache_key` é obtido no response do `POST /analyze`."""
+    raw = get_blueprint(cache_key)
+    if raw is None:
+        raise HTTPException(404, "Blueprint não encontrado. Rode /analyze novamente.")
+    records = json.loads(raw)
+    filtered = [r for r in records if r.get("DuplaNormalizada") == dupla]
+    if linha is not None:
+        filtered = [r for r in filtered if str(r.get("Linha", "")) == linha]
+    cols = ["Torneio", "Confronto", "Data", "Horario Jogo", "Hora", "Resultado", "Lucro/Prej.", "__bet"]
+    if linha:
+        cols.insert(3, "Linha")
+    # Só incluir colunas que existem nos dados
+    available_cols = set()
+    if filtered:
+        available_cols = set(filtered[0].keys())
+    cols = [c for c in cols if c in available_cols]
+    jogos = [{k: r.get(k) for k in cols} for r in filtered]
+    return {
+        "dupla": dupla,
+        "linha": linha,
+        "total_jogos": len(jogos),
+        "total_records": len(records),
+        "jogos": jogos,
+    }
+
+
+# ---------------------------------------------------------------------------
 # GET /export/{cache_key}
 # ---------------------------------------------------------------------------
-@router.get("/export/{cache_key}")
+@router.get("/export/{cache_key}", tags=["export"], summary="Baixar resultado como .xlsx")
 def export_xlsx(_key: AuthDep, cache_key: str) -> StreamingResponse:
+    """Retorna o resultado de uma análise já processada como arquivo `.xlsx`.
+    O `cache_key` é obtido no response do `POST /analyze`. TTL do export: 1h."""
     xlsx_bytes = get_export(cache_key)
     if xlsx_bytes is None:
         raise HTTPException(
@@ -214,8 +305,9 @@ def export_xlsx(_key: AuthDep, cache_key: str) -> StreamingResponse:
 # ---------------------------------------------------------------------------
 # GET /cache/status
 # ---------------------------------------------------------------------------
-@router.get("/cache/status")
+@router.get("/cache/status", tags=["cache"], summary="Status do Redis")
 def cache_status(_key: AuthDep) -> dict:
+    """Retorna estatísticas do Redis: total de chaves, memória, hit rate e uptime."""
     try:
         return get_cache_stats()
     except Exception as exc:
@@ -225,8 +317,9 @@ def cache_status(_key: AuthDep) -> dict:
 # ---------------------------------------------------------------------------
 # DELETE /cache/{cache_key}
 # ---------------------------------------------------------------------------
-@router.delete("/cache/{cache_key}")
+@router.delete("/cache/{cache_key}", tags=["cache"], summary="Invalidar entrada do cache")
 def invalidate_cache(_key: AuthDep, cache_key: str) -> dict:
+    """Remove manualmente uma entrada do cache pelo `cache_key`."""
     deleted = delete_cache_key(cache_key)
     if not deleted:
         raise HTTPException(status_code=404, detail="Cache key não encontrada.")

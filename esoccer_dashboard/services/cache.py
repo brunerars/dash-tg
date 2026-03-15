@@ -18,11 +18,23 @@ def get_redis_client() -> redis.Redis:
     return _client
 
 
-def gerar_cache_key(files_bytes: list[bytes], strategy: str) -> str:
+def gerar_cache_key(
+    files_bytes: list[bytes],
+    strategy: str,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    horarios: list[str] | None = None,
+) -> str:
     h = hashlib.md5()
     for b in sorted(files_bytes):
         h.update(b)
     h.update(strategy.encode())
+    if date_from:
+        h.update(date_from.encode())
+    if date_to:
+        h.update(date_to.encode())
+    if horarios:
+        h.update(f"h:{','.join(sorted(horarios))}".encode())
     return h.hexdigest()
 
 
@@ -55,9 +67,20 @@ def get_export(cache_key: str) -> bytes | None:
     return base64.b64decode(raw)
 
 
+def store_blueprint(cache_key: str, df_json: str, ttl: int = CACHE_TTL_ANALYSIS) -> None:
+    r = get_redis_client()
+    r.setex(f"blueprint:{cache_key}", ttl, df_json.encode("utf-8"))
+
+
+def get_blueprint(cache_key: str) -> str | None:
+    r = get_redis_client()
+    raw = r.get(f"blueprint:{cache_key}")
+    return raw.decode("utf-8") if raw else None
+
+
 def delete_cache_key(cache_key: str) -> bool:
     r = get_redis_client()
-    deleted = r.delete(f"analysis:{cache_key}", f"export:{cache_key}")
+    deleted = r.delete(f"analysis:{cache_key}", f"export:{cache_key}", f"blueprint:{cache_key}")
     return deleted > 0
 
 

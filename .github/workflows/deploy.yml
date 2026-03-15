@@ -1,28 +1,26 @@
-name: CI/CD — api-esoccer (Fast Build & Deploy)
+name: CI/CD — eSoccer Dashboard (API + Frontend)
 
 on:
   push:
-    branches: [main]
+    branches: [api-dash]
   workflow_dispatch:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE: ghcr.io/${{ github.repository_owner }}/api-esoccer
+  IMAGE_API: ghcr.io/${{ github.repository_owner }}/api-esoccer
+  IMAGE_FRONTEND: ghcr.io/${{ github.repository_owner }}/esoccer-frontend
 
 concurrency:
-  group: deploy-api-esoccer-${{ github.ref }}
+  group: deploy-esoccer-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   build:
-    name: Build & Push (rápido)
+    name: Build & Push Images
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
-
-    outputs:
-      short_sha: ${{ steps.meta.outputs.short_sha }}
 
     steps:
       - name: Checkout código
@@ -39,36 +37,58 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ github.token }}
 
-      - name: Cache Docker layers
-        uses: actions/cache@v4
-        with:
-          path: /tmp/.buildx-cache
-          key: ${{ runner.os }}-buildx-${{ github.sha }}
-          restore-keys: |
-            ${{ runner.os }}-buildx-
-
       - name: Setup Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build & Push Image
+      - name: Cache Docker layers (API)
+        uses: actions/cache@v4
+        with:
+          path: /tmp/.buildx-cache-api
+          key: ${{ runner.os }}-buildx-api-${{ github.sha }}
+          restore-keys: ${{ runner.os }}-buildx-api-
+
+      - name: Build & Push API
         uses: docker/build-push-action@v5
         with:
           context: .
           file: ./Dockerfile
           push: true
           tags: |
-            ${{ env.IMAGE }}:${{ steps.meta.outputs.short_sha }}
-            ${{ env.IMAGE }}:latest
-          cache-from: type=local,src=/tmp/.buildx-cache
-          cache-to: type=local,dest=/tmp/.buildx-cache-new,mode=max
+            ${{ env.IMAGE_API }}:${{ steps.meta.outputs.short_sha }}
+            ${{ env.IMAGE_API }}:latest
+          cache-from: type=local,src=/tmp/.buildx-cache-api
+          cache-to: type=local,dest=/tmp/.buildx-cache-api-new,mode=max
 
-      - name: Mover cache
+      - name: Cache Docker layers (Frontend)
+        uses: actions/cache@v4
+        with:
+          path: /tmp/.buildx-cache-frontend
+          key: ${{ runner.os }}-buildx-frontend-${{ github.sha }}
+          restore-keys: ${{ runner.os }}-buildx-frontend-
+
+      - name: Build & Push Frontend
+        uses: docker/build-push-action@v5
+        with:
+          context: ./esoccerdashboard
+          file: ./esoccerdashboard/Dockerfile
+          push: true
+          build-args: |
+            VITE_API_BASE_URL=https://api-esoccer.arvsystems.cloud
+            VITE_API_KEY=${{ secrets.VITE_API_KEY }}
+          tags: |
+            ${{ env.IMAGE_FRONTEND }}:${{ steps.meta.outputs.short_sha }}
+            ${{ env.IMAGE_FRONTEND }}:latest
+          cache-from: type=local,src=/tmp/.buildx-cache-frontend
+          cache-to: type=local,dest=/tmp/.buildx-cache-frontend-new,mode=max
+
+      - name: Mover caches
         run: |
-          rm -rf /tmp/.buildx-cache
-          mv /tmp/.buildx-cache-new /tmp/.buildx-cache
+          rm -rf /tmp/.buildx-cache-api /tmp/.buildx-cache-frontend
+          mv /tmp/.buildx-cache-api-new /tmp/.buildx-cache-api
+          mv /tmp/.buildx-cache-frontend-new /tmp/.buildx-cache-frontend
 
   deploy:
-    name: Deploy (rápido)
+    name: Deploy to VPS
     runs-on: ubuntu-latest
     needs: build
     permissions:
@@ -79,16 +99,8 @@ jobs:
       - name: Validar secrets de deploy
         shell: bash
         run: |
-          if [ -z "${{ secrets.VPS_HOST }}" ]; then
-            echo "Secret ausente: VPS_HOST"
-            exit 1
-          fi
-          if [ -z "${{ secrets.VPS_USER }}" ]; then
-            echo "Secret ausente: VPS_USER"
-            exit 1
-          fi
-          if [ -z "${{ secrets.VPS_SSH_KEY }}" ]; then
-            echo "Secret ausente: VPS_SSH_KEY"
+          if [ -z "${{ secrets.VPS_HOST }}" ] || [ -z "${{ secrets.VPS_USER }}" ] || [ -z "${{ secrets.VPS_SSH_KEY }}" ]; then
+            echo "Secrets de deploy ausentes (VPS_HOST, VPS_USER, VPS_SSH_KEY)"
             exit 1
           fi
 
@@ -103,54 +115,46 @@ jobs:
           script: |
             set -e
 
-            IMAGE="${{ env.IMAGE }}"
-            SERVICE_EXPECTED="api-esoccer_api"
+            IMAGE_API="${{ env.IMAGE_API }}"
+            IMAGE_FRONTEND="${{ env.IMAGE_FRONTEND }}"
 
             resolve_service() {
               expected="$1"
               suffix="$2"
-
               if docker service inspect "${expected}" >/dev/null 2>&1; then
-                echo "${expected}"
-                return 0
+                echo "${expected}"; return 0
               fi
-
               found="$(docker service ls --format '{{.Name}}' | grep -E "_${suffix}$" | head -n 1 || true)"
               if [ -n "${found}" ]; then
-                echo "${found}"
-                return 0
+                echo "${found}"; return 0
               fi
-
               return 1
             }
 
             echo "🔐 Login no registry..."
             echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
 
-            echo "📦 Pulling imagem nova..."
-            docker pull "${IMAGE}:latest"
+            echo "📦 Pulling imagens..."
+            docker pull "${IMAGE_API}:latest"
+            docker pull "${IMAGE_FRONTEND}:latest"
 
-            echo "🔎 Verificando stack/serviço..."
-            SERVICE="$(resolve_service "${SERVICE_EXPECTED}" "api")" || true
-
-            if [ -z "${SERVICE}" ]; then
-              echo "❌ Stack 'api-esoccer' não existe. Crie no Portainer primeiro:"
-              echo "   1. Portainer → Stacks → Add Stack (nome: api-esoccer)"
-              echo "   2. Aponte para docker-compose.prod.yml do repo"
-              echo "   3. Env vars: IMAGE=ghcr.io/${{ github.repository_owner }}/api-esoccer"
-              echo "              API_KEYS=<suas_chaves>"
-              echo "   4. Deploy → depois o CI/CD atualiza automaticamente"
-              docker service ls
-              exit 1
+            # --- API ---
+            SVC_API="$(resolve_service "api-esoccer_api" "api")" || true
+            if [ -n "${SVC_API}" ]; then
+              echo "🚀 Atualizando API (${SVC_API})..."
+              docker service update --image "${IMAGE_API}:latest" --with-registry-auth --force "${SVC_API}"
+            else
+              echo "⚠️  Serviço API não encontrado. Crie a stack no Portainer."
             fi
 
-            echo "🚀 Atualizando serviço (${SERVICE})..."
-
-            docker service update \
-              --image "${IMAGE}:latest" \
-              --with-registry-auth \
-              --force \
-              "${SERVICE}"
+            # --- Frontend ---
+            SVC_FRONT="$(resolve_service "api-esoccer_frontend" "frontend")" || true
+            if [ -n "${SVC_FRONT}" ]; then
+              echo "🚀 Atualizando Frontend (${SVC_FRONT})..."
+              docker service update --image "${IMAGE_FRONTEND}:latest" --with-registry-auth --force "${SVC_FRONT}"
+            else
+              echo "⚠️  Serviço Frontend não encontrado. Redeploy a stack para criá-lo."
+            fi
 
             echo "🧹 Limpando imagens antigas..."
             docker image prune -f
