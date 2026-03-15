@@ -82,7 +82,10 @@ export function DalePage() {
     return rows;
   }, [allResults, minMatches, minPercentage, dale.playerSearch, dale.selectedTournaments]);
 
-  // Auto re-analyze when pre-analysis filters change (bets, period)
+  // Ref always pointing to latest dale state (avoids stale closures in setTimeout)
+  const daleRef = useRef(dale);
+  daleRef.current = dale;
+
   const hasAnalyzedRef = useRef(false);
   useEffect(() => { hasAnalyzedRef.current = hasAnalyzed; }, [hasAnalyzed]);
 
@@ -106,12 +109,17 @@ export function DalePage() {
   }, [selectedBets, dateFrom, dateTo]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleAnalyze = async () => {
-    const toSend = filteredFiles.length > 0 ? filteredFiles : files;
+    const current = daleRef.current;
+    const bets = current.selectedBets;
+    const allFiles = current.files;
+    const toSend = bets.length > 0
+      ? allFiles.filter((f) => bets.includes(detectBet(f.name)))
+      : allFiles;
     if (toSend.length === 0) return;
     setIsAnalyzing(true);
     setError(null);
     try {
-      const data = await analyzeFiles(toSend, STRATEGY_ID, dateFrom || undefined, dateTo || undefined);
+      const data = await analyzeFiles(toSend, STRATEGY_ID, current.dateFrom || undefined, current.dateTo || undefined);
       const rows: ResultRow[] = (data.results ?? []).map(normalizeResult);
       const now = new Date().toLocaleDateString("pt-BR", { day: "2-digit", month: "short", year: "numeric" });
       addAnalysis({ name: files.map((f) => f.name).join(", "), type: "Dale", date: now, duplas: rows.length });

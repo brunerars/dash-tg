@@ -93,7 +93,10 @@ export function OverUnderPage() {
     return rows;
   }, [allResults, minMatches, minPercentage, overUnder.playerSearch, overUnder.selectedTournaments, overUnder.selectedLinhas]);
 
-  // Auto re-analyze when pre-analysis filters change (horarios, period)
+  // Ref always pointing to latest state (avoids stale closures in setTimeout)
+  const ouRef = useRef(overUnder);
+  ouRef.current = overUnder;
+
   const hasAnalyzedRef = useRef(false);
   useEffect(() => { hasAnalyzedRef.current = hasAnalyzed; }, [hasAnalyzed]);
 
@@ -122,15 +125,20 @@ export function OverUnderPage() {
   }, [selectedBets, overUnder.selectedHorarios, dateFrom, dateTo]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleAnalyze = async () => {
-    const toSend = filteredFiles.length > 0 ? filteredFiles : files;
+    const current = ouRef.current;
+    const bets = current.selectedBets;
+    const allFiles = current.files;
+    const toSend = bets.length > 0
+      ? allFiles.filter((f) => bets.includes(detectBet(f.name)))
+      : allFiles;
     if (toSend.length === 0) return;
     setIsAnalyzing(true);
     setError(null);
     try {
       const data = await analyzeFiles(
         toSend, STRATEGY_ID,
-        dateFrom || undefined, dateTo || undefined,
-        overUnder.selectedHorarios.length > 0 ? overUnder.selectedHorarios : undefined
+        current.dateFrom || undefined, current.dateTo || undefined,
+        current.selectedHorarios.length > 0 ? current.selectedHorarios : undefined
       );
       const rows: ResultRow[] = (data.results ?? []).map(normalizeResult);
       const now = new Date().toLocaleDateString("pt-BR", { day: "2-digit", month: "short", year: "numeric" });
