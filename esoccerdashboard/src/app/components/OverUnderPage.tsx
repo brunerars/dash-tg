@@ -144,8 +144,6 @@ export function OverUnderPage() {
         totalJogosBrutos: data.total_jogos_brutos,
         totalJogosAposDedup: data.total_jogos_apos_dedup,
         hasAnalyzed: true,
-        // If backend returns horarios_unicos, use those (more accurate); otherwise keep frontend-extracted
-        availableHorarios: data.horarios_unicos ?? prev.availableHorarios,
       }));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Erro desconhecido");
