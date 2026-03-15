@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
+  <!-- Background circle -->
+  <circle cx="256" cy="256" r="240" fill="#0a0a0a"/>
+  <circle cx="256" cy="256" r="240" stroke="#ea580c" stroke-width="8" stroke-opacity="0.3"/>
+
+  <!-- Three bars (logo mark) -->
+  <rect x="138" y="148" width="44" height="216" rx="22" fill="#ea580c"/>
+  <rect x="234" y="108" width="44" height="296" rx="22" fill="#ea580c"/>
+  <rect x="330" y="168" width="44" height="176" rx="22" fill="#ea580c"/>
+
+  <!-- Subtle glow on middle bar -->
+  <rect x="234" y="108" width="44" height="296" rx="22" fill="url(#glow)" opacity="0.4"/>
+
+  <defs>
+    <linearGradient id="glow" x1="256" y1="108" x2="256" y2="404" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#fdba74"/>
+      <stop offset="1" stop-color="#ea580c"/>
+    </linearGradient>
+  </defs>
+</svg>
