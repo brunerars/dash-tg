@@ -35,7 +35,7 @@ services:
       labels:
         - traefik.enable=true
         - traefik.docker.network=network_public
-        - traefik.http.routers.esoccer_dash.rule=Host(`esoccer.arvsystems.cloud`)
+        - traefik.http.routers.esoccer_dash.rule=Host(`dash-tg.arvsystems.cloud`)
         - traefik.http.routers.esoccer_dash.entrypoints=websecure
         - traefik.http.routers.esoccer_dash.tls.certresolver=letsencryptresolver
         - traefik.http.services.esoccer_dash.loadbalancer.server.port=80
