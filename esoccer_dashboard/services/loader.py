@@ -12,8 +12,14 @@ REQUIRED_COLUMNS = ("Torneio", "Confronto", "Data", "Hora", "Resultado", "Lucro/
 
 _BET_PATTERNS: list[tuple[str, str]] = [
     ("BETANO", "Betano"),
+    ("NOVIBET", "Novibet"),
     ("365", "365"),
     ("SUPER", "Super"),
+    # Bot export short codes: "OVER  b" = Betano, "OVER  3" / "DALE  3" = 365, etc.
+    ("  B  ", "Betano"),
+    ("  3  ", "365"),
+    ("  S  ", "Super"),
+    ("  N  ", "Novibet"),
 ]
 
 
@@ -96,7 +102,7 @@ def load_tips_enviadas(files: Iterable[UploadedLike]) -> LoadResult:
         bio = BytesIO(content)
 
         try:
-            df = pd.read_excel(bio, sheet_name=SHEET_NAME)
+            df = pd.read_excel(bio, sheet_name=SHEET_NAME, engine="openpyxl")
         except ValueError as e:
             raise ValueError(f"Arquivo '{source_name}' não tem a aba '{SHEET_NAME}'.") from e
 

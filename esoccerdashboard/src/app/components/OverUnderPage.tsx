@@ -137,6 +137,13 @@ export function OverUnderPage() {
       const rows: ResultRow[] = (data.results ?? []).map(normalizeResult);
       const now = new Date().toLocaleDateString("pt-BR", { day: "2-digit", month: "short", year: "numeric" });
       addAnalysis({ name: files.map((f) => f.name).join(", "), type: "Over/Under", date: now, duplas: rows.length });
+      // Fallback: if Worker didn't extract horarios, parse from backend response
+      let horariosFromBackend: string[] | undefined;
+      if (data.horarios_unicos && data.horarios_unicos.length > 0) {
+        const mins = new Set(data.horarios_unicos.map((h: string) => String(parseInt(h.split(":")[0], 10))));
+        horariosFromBackend = [...mins].filter((m) => !isNaN(Number(m))).sort((a, b) => Number(a) - Number(b));
+      }
+
       setOverUnder((prev) => ({
         ...prev,
         results: rows,
@@ -144,6 +151,10 @@ export function OverUnderPage() {
         totalJogosBrutos: data.total_jogos_brutos,
         totalJogosAposDedup: data.total_jogos_apos_dedup,
         hasAnalyzed: true,
+        // Worker values take priority; backend fallback if Worker didn't run
+        availableHorarios: prev.availableHorarios.length > 0
+          ? prev.availableHorarios
+          : (horariosFromBackend ?? []),
       }));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Erro desconhecido");
