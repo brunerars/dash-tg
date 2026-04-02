@@ -1,11 +1,23 @@
-import { Outlet } from "react-router";
+import { Outlet, useNavigate } from "react-router";
 import { Sidebar } from "./Sidebar";
 import { useTheme } from "./ThemeContext";
-import { Moon, Sun } from "lucide-react";
+import { useAuth } from "./AuthContext";
+import { useSession, defaultPageState } from "./SessionContext";
+import { Moon, Sun, LogOut } from "lucide-react";
 
 export function Layout() {
   const { theme, toggleTheme } = useTheme();
   const isDark = theme === "dark";
+  const { logout } = useAuth();
+  const { setDale, setOverUnder } = useSession();
+  const navigate = useNavigate();
+
+  const handleLogout = async () => {
+    await logout();
+    setDale(() => defaultPageState);
+    setOverUnder(() => defaultPageState);
+    navigate("/login", { replace: true });
+  };
 
   return (
     <div className="flex h-screen w-full overflow-hidden">
@@ -40,35 +52,67 @@ export function Layout() {
             WebkitBackdropFilter: "blur(8px)",
           }}
         >
-          <button
-            onClick={toggleTheme}
-            title={isDark ? "Modo claro" : "Modo escuro"}
-            className="flex items-center gap-2 rounded-full text-xs font-semibold uppercase tracking-widest transition-all duration-200"
-            style={{
-              padding: "7px 16px",
-              border: isDark ? "1px solid rgba(255,255,255,0.1)" : "1px solid #d4d4d4",
-              background: isDark ? "rgba(255,255,255,0.04)" : "rgba(0,0,0,0.05)",
-              color: isDark ? "#a1a1a1" : "#737373",
-            }}
-            onMouseEnter={(e) => {
-              const el = e.currentTarget;
-              if (isDark) {
-                el.style.borderColor = "#ea580c";
-                el.style.color = "#ea580c";
-              } else {
-                el.style.borderColor = "#0a0a0a";
-                el.style.color = "#0a0a0a";
-              }
-            }}
-            onMouseLeave={(e) => {
-              const el = e.currentTarget;
-              el.style.borderColor = isDark ? "rgba(255,255,255,0.1)" : "#d4d4d4";
-              el.style.color = isDark ? "#a1a1a1" : "#737373";
-            }}
-          >
-            {isDark ? <Sun className="w-3.5 h-3.5" /> : <Moon className="w-3.5 h-3.5" />}
-            <span>{isDark ? "Claro" : "Escuro"}</span>
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleLogout}
+              title="Sair"
+              className="flex items-center gap-2 rounded-full text-xs font-semibold uppercase tracking-widest transition-all duration-200"
+              style={{
+                padding: "7px 16px",
+                border: isDark ? "1px solid rgba(255,255,255,0.1)" : "1px solid #d4d4d4",
+                background: isDark ? "rgba(255,255,255,0.04)" : "rgba(0,0,0,0.05)",
+                color: isDark ? "#a1a1a1" : "#737373",
+              }}
+              onMouseEnter={(e) => {
+                const el = e.currentTarget;
+                if (isDark) {
+                  el.style.borderColor = "#ea580c";
+                  el.style.color = "#ea580c";
+                } else {
+                  el.style.borderColor = "#0a0a0a";
+                  el.style.color = "#0a0a0a";
+                }
+              }}
+              onMouseLeave={(e) => {
+                const el = e.currentTarget;
+                el.style.borderColor = isDark ? "rgba(255,255,255,0.1)" : "#d4d4d4";
+                el.style.color = isDark ? "#a1a1a1" : "#737373";
+              }}
+            >
+              <LogOut className="w-3.5 h-3.5" />
+              <span>Sair</span>
+            </button>
+
+            <button
+              onClick={toggleTheme}
+              title={isDark ? "Modo claro" : "Modo escuro"}
+              className="flex items-center gap-2 rounded-full text-xs font-semibold uppercase tracking-widest transition-all duration-200"
+              style={{
+                padding: "7px 16px",
+                border: isDark ? "1px solid rgba(255,255,255,0.1)" : "1px solid #d4d4d4",
+                background: isDark ? "rgba(255,255,255,0.04)" : "rgba(0,0,0,0.05)",
+                color: isDark ? "#a1a1a1" : "#737373",
+              }}
+              onMouseEnter={(e) => {
+                const el = e.currentTarget;
+                if (isDark) {
+                  el.style.borderColor = "#ea580c";
+                  el.style.color = "#ea580c";
+                } else {
+                  el.style.borderColor = "#0a0a0a";
+                  el.style.color = "#0a0a0a";
+                }
+              }}
+              onMouseLeave={(e) => {
+                const el = e.currentTarget;
+                el.style.borderColor = isDark ? "rgba(255,255,255,0.1)" : "#d4d4d4";
+                el.style.color = isDark ? "#a1a1a1" : "#737373";
+              }}
+            >
+              {isDark ? <Sun className="w-3.5 h-3.5" /> : <Moon className="w-3.5 h-3.5" />}
+              <span>{isDark ? "Claro" : "Escuro"}</span>
+            </button>
+          </div>
         </header>
 
         <main className="flex-1 overflow-y-auto">
