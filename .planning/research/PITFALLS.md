@@ -1,288 +1,281 @@
 # Domain Pitfalls
 
-**Domain:** FastAPI + Redis + pandas — async pre-computation, filter removal, auth migration
+**Domain:** Frontend JWT cookie auth migration + route protection + polling (React SPA)
 **Researched:** 2026-04-02
-**Confidence:** HIGH (verified against FastAPI official docs, pandas docs, multiple implementation reports)
+**Scope:** Adding JWT HttpOnly cookie auth, login page, route guards, and pre-compute polling to existing React 18 + Vite 6 + react-router v7 app that currently uses X-API-Key header auth.
 
 ---
 
 ## Critical Pitfalls
 
-### Pitfall 1: BackgroundTasks Does Not Escape the GIL for CPU-Bound Work
-
-**What goes wrong:** The developer wraps the pandas pipeline in `background_tasks.add_task(compute_combinations, files, strategy)` and calls it async. The API appears to return immediately, but any concurrent request still blocks — because `BackgroundTasks` dispatches to the same thread pool as the event loop, and Python's GIL prevents true parallelism for CPU-bound code. With 7 combinations of 150k-row DataFrames, total CPU time easily exceeds 30–60 seconds per upload, starving all concurrent requests.
-
-**Why it happens:** FastAPI's `BackgroundTasks` is documented for fire-and-forget I/O tasks (sending emails, writing logs). For CPU-bound pandas operations — groupby, merge, dedup, metric computation — async does not help. The GIL ensures only one thread executes Python bytecode at a time regardless of the async wrapper.
-
-**Consequences:** The API becomes unresponsive during background computation. If two users upload simultaneously, one queues behind the other. The problem is invisible in single-user smoke tests but surfaces immediately in any concurrent scenario.
-
-**Prevention:** Run the combination pipeline in a separate thread pool using `asyncio.to_thread()` or `starlette.concurrency.run_in_threadpool()`. This releases the event loop to handle other requests while the CPU work happens on a worker thread. For this single-user deployment, `run_in_threadpool` is sufficient — Celery adds infrastructure complexity that is not justified here.
-
-```python
-from starlette.concurrency import run_in_threadpool
-
-async def precompute_all_combinations(files_bytes, strategy):
-    await run_in_threadpool(_compute_combinations_sync, files_bytes, strategy)
-```
-
-**Warning signs:** Upload response time grows with number of files. `/health` endpoint becomes slow or times out during an active computation.
-
-**Phase:** Async pre-computation phase (Phase 1).
+Mistakes that cause broken auth, security holes, or UX regressions.
 
 ---
 
-### Pitfall 2: No Status Tracking — Client Has No Way to Know When Pre-computation Finishes
+### Pitfall 1: Residual X-API-Key Header After Migration — Silent Dual Auth
 
-**What goes wrong:** The upload endpoint returns 200 immediately, the background task begins, but there is no mechanism for the frontend to know when the 7 combinations are ready. The frontend either polls `/analyze` (which might return stale cache or trigger re-computation) or blindly waits a fixed time. If the background task fails silently, the user never knows.
+**What goes wrong:** `api.ts` currently passes `headers: authHeaders` (`{ "X-API-Key": API_KEY }`) on every `fetch` call. During migration, if `credentials: "include"` is added without removing `authHeaders`, both auth methods run simultaneously. The backend accepts the API Key (still in env) so everything appears to work — but the cookie path is never exercised. The bug only surfaces after `VITE_API_KEY` is removed from the environment.
 
-**Why it happens:** FastAPI `BackgroundTasks` provides zero built-in status, progress, or failure reporting. Exceptions raised inside `background_tasks.add_task(fn)` are swallowed unless explicitly caught and written to an external store.
+**Why it happens:** Replacing a header with an invisible browser mechanism leaves no compile-time signal. A developer can add `credentials: "include"` to one call and forget to remove `authHeaders` from five others. The `console.log("[API] API_KEY definida:", !!API_KEY)` line in `api.ts` gives false confidence that auth is working when it is the old path doing the work.
 
-**Consequences:** Silent failures leave the cache empty while the UI shows "processing complete." Errors in any one combination (e.g., a file with malformed data) kill the entire background task with no user-facing feedback. The frontend has no reliable signal to trigger a "results are ready" refresh.
-
-**Prevention:** Use Redis as the status store. Write a status key before launching background work, update it per combination as they complete, and write a final status on success or error.
-
-```python
-# Pattern: status:{upload_id} = {"total": 7, "done": 0, "errors": []}
-# Each combination writes its result to analysis:{cache_key}
-# Background task updates status key atomically on each completion
-```
-
-Expose a `GET /precompute/status/{upload_id}` endpoint. Wrap each combination computation in try/except and write error details to the status key — never let exceptions propagate silently.
-
-**Warning signs:** Frontend shows "loading" indefinitely after upload. Redis has no `status:` keys despite active processing.
-
-**Phase:** Async pre-computation phase (Phase 1).
-
----
-
-### Pitfall 3: Combinatorial Memory Explosion — All 7 DataFrames In-Process Simultaneously
-
-**What goes wrong:** For n=3 files with 150k rows each, computing all 2^3 - 1 = 7 combinations naively means holding up to 7 separate DataFrames in memory concurrently. A single 150k-row DataFrame with the full column set is ~50–100 MB. Running all 7 combinations simultaneously inside one background task creates 350–700 MB of peak memory pressure on a VPS that may have 1–2 GB total. The Docker container OOM-kills the process mid-computation, silently clearing the status key and leaving the cache in a partial state.
-
-**Why it happens:** The natural implementation iterates over combinations and fires them all concurrently. pandas `concat`, `merge`, and `groupby` operations create intermediate copies. The existing codebase already stores pickled DataFrames in Redis (`filedf:{md5}`) which adds additional memory per file.
-
-**Consequences:** Container restart during background computation. Partial cache state: some combinations cached, others not. No user-facing error since the process died. The partial state persists in Redis for 24h, causing inconsistent results on subsequent requests.
-
-**Prevention:** Compute combinations sequentially, not concurrently, in the background task. This trades latency for memory stability. For n=3 files, 7 sequential combinations at 150k rows is still fast enough (~30–60s total) for a background pre-computation model. Additionally, explicitly `del df` and `gc.collect()` after storing each combination result to Redis before beginning the next.
-
-```python
-for combination in all_combinations(files):
-    result = compute_pipeline(combination)
-    store_to_redis(result)
-    del result  # explicit release before next combination
-    gc.collect()
-```
-
-**Warning signs:** Container memory usage climbs past 80% during uploads. Redis keys from previous computation are missing after a new upload. Docker logs show OOM kill events.
-
-**Phase:** Async pre-computation phase (Phase 1).
-
----
-
-### Pitfall 4: Removing Backend Filters Silently Breaks the Existing Frontend and Export
-
-**What goes wrong:** The developer removes `min_jogos` and `min_green_pct` filtering from `_analyze_with_strategy()` and deploys. The existing frontend, which was built expecting filtered results, now receives 10–100x more rows per response. The export `.xlsx` also grows. The frontend's table rendering slows or crashes. Cached results from before the change are filtered; results after are unfiltered — the same `cache_key` formula returns different result shapes depending on deploy time.
-
-**Why it happens:** The response contract changed (more rows, same structure) but the cache key did not change. Redis may serve old filtered results to the new frontend, or new unfiltered results to the old frontend, with no version signal in the response.
-
-**Consequences:** Frontend table renders 500+ rows when it previously rendered 20. Export file size jumps from 50KB to 5MB. Existing `analysis:` cache entries return filtered data while new entries return unfiltered — two users with the same files get different row counts depending on which hit the cache first.
-
-**Prevention:** 
-1. Coordinate the deployment: update frontend to handle unfiltered data before removing backend filters, or deploy both simultaneously.
-2. Invalidate all existing `analysis:` and `export:` cache entries at deploy time — the data shape has fundamentally changed.
-3. Add an `api_version` field to the response or change the cache key formula to include a schema version, so stale filtered results are never served to the new frontend.
-4. Keep `total_rows_unfiltered` in the response metadata so the frontend can implement its own filtering without a second API call.
-
-**Warning signs:** Frontend table row count is inconsistent between page refreshes. Export file size varies unexpectedly. Redis hit rate stays high after the deploy (old filtered results being served).
-
-**Phase:** Filter removal phase (Phase 2).
-
----
-
-### Pitfall 5: JWT in localStorage Instead of HttpOnly Cookie — XSS Exposes the Auth Token
-
-**What goes wrong:** The developer implements login/password and issues a JWT, then stores it in `localStorage` so the frontend JavaScript can attach it as a `Bearer` header. Any XSS vulnerability in the frontend (including third-party scripts) can read `localStorage` and exfiltrate the token. For a single-user dashboard with sensitive betting analysis data, this is a meaningful risk.
-
-**Why it happens:** The `Bearer` token pattern is the default example in FastAPI's official security documentation. It is the path of least resistance, especially for APIs originally designed for machine clients (API keys). Frontend developers often reach for `localStorage` because it persists across page refreshes and is easy to read from JavaScript.
-
-**Consequences:** A malicious script (ad network, analytics vendor, compromised CDN) silently exfiltrates the JWT. Since there is only one user and one valid password, token theft = full account compromise with no revocation possible until the secret key is rotated.
-
-**Prevention:** Issue the JWT as an `HttpOnly; Secure; SameSite=Strict` cookie. The browser attaches it automatically to same-origin requests and JavaScript cannot read it. The FastAPI endpoint reads it via `Request.cookies.get("access_token")` instead of the `Authorization` header.
-
-```python
-response.set_cookie(
-    key="access_token",
-    value=f"Bearer {token}",
-    httponly=True,
-    secure=True,       # only over HTTPS
-    samesite="strict",
-)
-```
-
-**Warning signs:** Frontend code calls `localStorage.setItem("token", ...)`. The `/login` response returns the token in the JSON body (not `Set-Cookie` header). Browser DevTools shows the token readable under Application > Local Storage.
-
-**Phase:** Auth migration phase (Phase 3).
-
----
-
-### Pitfall 6: CSRF Blind Spot When Switching from API Key to Cookie Auth
-
-**What goes wrong:** The API key in `X-API-Key` header is inherently CSRF-safe — a malicious website cannot set custom request headers from the browser. Switching to cookie-based auth removes this protection. With `SameSite=Strict` on the cookie and `allow_origins=["*"]` on CORS, a malicious page cannot directly call the API — but relaxing CORS later (or if `SameSite` is set to `Lax`) reopens the attack surface.
-
-**Why it happens:** Developers migrating auth focus on "does login work?" and miss that the threat model changed. The existing CORS config (`allow_origins=["*"]`) was acceptable with header-based API keys (browsers cannot forge `X-API-Key` cross-origin) but becomes actively dangerous with cookie auth.
-
-**Consequences:** A malicious website can trigger state-changing requests (file uploads, cache deletion) using the victim's browser session cookie, if CORS is wide-open and `SameSite` is not strictly enforced.
+**Consequences:**
+- All API calls work in dev (API Key still in `.env`) but fail in production after the key is removed from Portainer.
+- Migration appears complete in QA but breaks on first production deploy.
+- Mixed auth modes in the same codebase confuse future debugging.
 
 **Prevention:**
-1. Restrict `allow_origins` to the actual frontend domain before deploying cookie auth — this is listed as a concern in CONCERNS.md and must be fixed as part of auth migration, not after.
-2. Set `SameSite=Strict` on the auth cookie.
-3. For the `/analyze` (file upload) endpoint specifically, validate `Origin` or add a CSRF double-submit token.
+- Remove `VITE_API_KEY` from `.env` and `.env.example` on day one of the auth phase.
+- Replace all `fetch(url, { headers: authHeaders, ... })` calls with a central `apiFetch(url, options)` wrapper that sets `credentials: "include"` and no `X-API-Key` header. Do this in a single commit that touches every call site.
+- Delete the `const authHeaders = { "X-API-Key": API_KEY }` line and the `console.log("[API] API_KEY definida:", !!API_KEY)` log at the same time.
+- After migration, verify in DevTools Network that requests carry `Cookie: access_token=...`, not `X-API-Key`.
 
-**Warning signs:** `allow_origins=["*"]` is still present in `main.py` after auth migration. The `Set-Cookie` header lacks `SameSite=Strict`. No CSRF token in the login flow.
+**Detection:** DevTools → Network → any API request → Headers tab. If `X-API-Key` is present after the migration commit, the migration is incomplete.
 
-**Phase:** Auth migration phase (Phase 3). Cannot deploy cookie auth without fixing CORS first.
-
----
-
-### Pitfall 7: Swagger UI (`/docs`) Becomes Unusable After Cookie Auth Migration
-
-**What goes wrong:** The existing API key auth works seamlessly in Swagger UI via the `X-API-Key` header — developers can test endpoints directly. After switching to cookie-based auth, Swagger UI cannot handle `HttpOnly` cookies: there is no Swagger mechanism to set cookies from the UI, so every test endpoint returns 401. The developer must either maintain a parallel API key path or lose the Swagger testing workflow entirely.
-
-**Why it happens:** FastAPI's OpenAPI spec supports `apiKey` in header natively. Cookie auth requires `oauth2PasswordBearer` or a custom `APIKeyInCookie` scheme, neither of which Swagger UI manages as transparently. HttpOnly cookies cannot be set by JavaScript, so Swagger's JS client cannot inject them.
-
-**Consequences:** The test/debug loop slows significantly. Developers switch to `curl` or Postman. Integration tests that used the Swagger client break. Documentation loses its "Try it out" functionality.
-
-**Prevention:** Implement a `/login` endpoint that returns both a cookie (for browser use) and a JSON body token (for API clients and Swagger). Register a custom `SecurityScheme` in FastAPI for the Bearer token fallback so Swagger can still authenticate. Keep the API testable via `Authorization: Bearer <token>` header even when the primary auth path is cookie-based.
-
-```python
-# /login returns both:
-response.set_cookie("access_token", token, httponly=True, ...)
-return {"access_token": token, "token_type": "bearer"}  # for API clients
-```
-
-**Warning signs:** After auth migration, `/docs` "Authorize" button is removed or non-functional. Test scripts start hardcoding credentials inline.
-
-**Phase:** Auth migration phase (Phase 3).
+**Phase:** Phase 2 (auth migration).
 
 ---
 
-### Pitfall 8: Synchronous Redis Calls Block the Event Loop During Pre-computation
+### Pitfall 2: Auth State Flash — ProtectedRoute Redirects Before Cookie Check Completes
 
-**What goes wrong:** The current codebase uses synchronous `redis-py` (`redis.from_url()`) called from `async` handlers — already flagged in CONCERNS.md as a minor issue. This becomes a critical issue during background pre-computation: the background task writes 7 results to Redis using blocking Redis calls while the event loop is trying to serve other requests. Each `redis.set()` call blocks the event loop for the duration of the network round-trip to Redis.
+**What goes wrong:** On hard refresh of `/dale` or `/over-under`, the auth context initializes with `isAuthenticated: false` (its only safe default, since the HttpOnly cookie is invisible to JavaScript). The route guard runs synchronously, sees `false`, and immediately redirects to `/login`. The async `GET /auth/me` call then completes and confirms the user is authenticated — but they are already on `/login`.
 
-**Why it happens:** The existing sync Redis client was fine for the original synchronous-by-nature request processing. Pre-computation amplifies the problem: instead of 1–2 Redis writes per request, the background task does 14–21 writes (7 results + 7 status updates), all blocking.
+**Why it happens:** There is no `isLoading` state in the current `SessionContext`. The guard has only two states: authenticated or not. A third state (checking) is required to bridge the async cookie validation.
 
-**Consequences:** Other requests queue behind Redis I/O during active pre-computation. The `/health` endpoint becomes slow. Under any concurrent load, latency spikes during uploads.
+**Consequences:**
+- Every hard refresh kicks the user to `/login`. They are redirected back after the check completes (if the login page redirects authenticated users), causing a visible flash.
+- If the login page does not redirect authenticated users, the user must manually navigate back after every refresh.
+- Can produce a redirect loop: `/dale` → `/login` → `/dale` → `/login`.
 
-**Prevention:** Switch the cache service to `redis.asyncio` (the async client bundled in `redis-py` 4+) before implementing background pre-computation. Alternatively, wrap all Redis calls in `asyncio.to_thread()`. Given the existing sync client is already a concern, migrate to async Redis as part of the pre-computation phase.
+**Prevention:**
+- Add `isLoading: boolean` to the auth context. Initialize to `true`. Set to `false` after the `GET /auth/me` call resolves (success or failure).
+- In the `ProtectedRoute` component, render `null` (or a minimal spinner) while `isLoading === true`. Never redirect while loading.
+- Only redirect to `/login` when `isLoading === false && isAuthenticated === false`.
+- The backend already has `verify_jwt_cookie` — add a `GET /auth/me` endpoint that returns `{"username": sub}` to enable this check. One lightweight call on app mount.
 
-```python
-import redis.asyncio as aioredis
-client = aioredis.from_url(settings.REDIS_URL)
-await client.set(key, value, ex=ttl)
+```typescript
+function ProtectedRoute({ children }: { children: ReactNode }) {
+  const { isAuthenticated, isLoading } = useAuth();
+  if (isLoading) return null; // wait for cookie check
+  if (!isAuthenticated) return <Navigate to="/login" replace />;
+  return children;
+}
 ```
 
-**Warning signs:** API latency increases during background computation. `redis-py` sync client (`redis.Redis`) still used after pre-computation is added.
+**Detection:** Hard refresh on `/dale`. If you are redirected to `/login` even with a valid session, this pitfall is active.
 
-**Phase:** Async pre-computation phase (Phase 1) — fix before adding background tasks.
+**Phase:** Phase 2 (auth context + route guards).
+
+---
+
+### Pitfall 3: SameSite=Lax Cookie Not Sent on Cross-Port Dev Requests
+
+**What goes wrong:** Vite runs on `localhost:5173`. FastAPI runs on `localhost:8000`. The browser treats these as different origins (port is part of the origin). `SameSite=Lax` cookies are sent on same-site navigations but browser behavior for cross-port `localhost` requests is inconsistent. The login sets the cookie, but subsequent `fetch` calls to port 8000 may not include it — even with `credentials: "include"`.
+
+**Why it happens:** `SECURE_COOKIES` is configurable in `config/settings.py`. In dev it is likely `false`. Without `Secure=true`, `SameSite=None` cannot be used (browsers reject it). With `SameSite=Lax`, cross-port behavior is browser-dependent. The cookie appears in DevTools but is silently excluded from the request.
+
+**Consequences:** Login returns 200 and sets the cookie. The next API call returns 401. Appears as "auth broken" even though the token is valid. This breaks the entire dev workflow until a proxy is added.
+
+**Prevention — add a Vite dev proxy:**
+```typescript
+// vite.config.ts
+export default defineConfig({
+  server: {
+    proxy: {
+      "/api": {
+        target: "http://localhost:8000",
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api/, ""),
+      },
+    },
+  },
+  // ... rest of config
+});
+```
+
+With the proxy, the browser sends all API calls to `localhost:5173/api/...` (same origin), the proxy forwards to port 8000. The cookie is always sent. Set `VITE_API_BASE_URL=/api` in `.env.local`.
+
+This also eliminates the need for `FRONTEND_ORIGIN` to be correct in dev — CORS is not involved when requests are same-origin from the browser's perspective.
+
+**Detection:** DevTools → Application → Cookies: `access_token` exists. DevTools → Network → any POST/GET to port 8000: no `Cookie` header. That is the bug.
+
+**Phase:** Phase 2 (first thing, before any auth code is written).
+
+---
+
+### Pitfall 4: CORS Misconfiguration Silently Breaks Cookie Delivery
+
+**What goes wrong:** `main.py` correctly sets `allow_origins=[FRONTEND_ORIGIN]` with `allow_credentials=True`. The risk is `FRONTEND_ORIGIN` being empty, wrong, or inadvertently changed to `["*"]`. When `allow_origins=["*"]` is combined with `allow_credentials=True`, browsers block the response entirely — but the error message ("CORS error") does not explain that the root cause is the wildcard + credentials conflict.
+
+**Specific risks in this codebase:**
+- `FRONTEND_ORIGIN` env var not set in Portainer on first deploy → defaults to `http://localhost:3000` in `config/settings.py`, which does not match the production URL.
+- During debugging, a developer temporarily changes to `allow_origins=["*"]` and forgets to revert.
+- Trailing slash mismatch: `FRONTEND_ORIGIN=https://dash.example.com/` (with slash) vs the actual origin `https://dash.example.com` (without) causes a silent mismatch.
+
+**Prevention:**
+- Add a startup assertion in `main.py`: if `FRONTEND_ORIGIN` contains `*` and `allow_credentials=True`, raise a `ValueError` at startup.
+- Document the exact value of `FRONTEND_ORIGIN` to use in Portainer in the deploy checklist.
+- Never use `allow_origins=["*"]` with `allow_credentials=True` — this is enforced by browsers and will silently break all credentialed requests.
+
+**Detection:** Browser console: `Access to fetch at '...' from origin '...' has been blocked by CORS policy`. Check that the `Access-Control-Allow-Origin` response header matches exactly the origin in the request (no trailing slash, same scheme).
+
+**Phase:** Phase 2 (deploy validation).
+
+---
+
+### Pitfall 5: Polling Interval Leak — `setInterval` Not Cleared on Unmount or Job Completion
+
+**What goes wrong:** `OverUnderPage` will trigger `POST /precompute` and receive an array of `job_ids`. For each job ID, polling `GET /jobs/{job_id}` must run until the job reaches a terminal state (`completed` or `failed`). If the polling is implemented as `N` separate `setInterval` calls (one per job ID), and the `useEffect` cleanup does not clear all of them, intervals outlive the component.
+
+**Why it happens:** The `OverUnderPage` already has complex `useRef`/`useEffect` patterns for debouncing re-analysis. Adding polling intervals to this mix is high-risk for missing a cleanup. `setInterval` callbacks capture stale closures — if state is read directly inside the callback (not via a ref), the callback sees stale values and may call `setState` on an unmounted component.
+
+**Consequences:**
+- Network spam: up to 2^N-1 polling requests continue after the user navigates away.
+- React warning: "Can't perform a React state update on an unmounted component."
+- If the component remounts while old intervals are still running, duplicate intervals accumulate.
+
+**Prevention:**
+- Use a single interval that polls all pending job IDs in one tick, not N separate intervals.
+- Stop the interval when all jobs are in terminal states (`completed` or `failed`).
+- Always return a cleanup function from `useEffect` that calls `clearInterval`.
+- Read job state via a `useRef` inside the interval callback, not directly from state (avoids stale closure).
+
+```typescript
+useEffect(() => {
+  if (jobIds.length === 0) return;
+  const id = setInterval(async () => {
+    const results = await Promise.all(jobIds.map(id => fetchJobStatus(id)));
+    setJobStatuses(results);
+    const allDone = results.every(r => r.status === "completed" || r.status === "failed");
+    if (allDone) clearInterval(id);
+  }, 3000);
+  return () => clearInterval(id); // cleanup on unmount OR jobIds change
+}, [jobIds]);
+```
+
+**Detection:** Navigate away from Over/Under page while pre-compute is running. Open DevTools Network. If `GET /jobs/...` requests continue appearing, the cleanup is missing.
+
+**Phase:** Phase 3 (pre-compute polling).
+
+---
+
+### Pitfall 6: Logout Does Not Immediately Clear Client Auth State
+
+**What goes wrong:** `POST /auth/logout` deletes the `access_token` cookie on the server. But if the auth context still holds `isAuthenticated: true` after the call, the UI stays fully accessible. The next hard refresh triggers the auth check, discovers the cookie is gone, and finally redirects — but only on refresh.
+
+**Why it happens:** HttpOnly cookies are invisible to JavaScript. The client cannot directly observe the cookie being deleted. If `POST /auth/logout` is called without awaiting the response and updating context state, the UI and server auth state diverge.
+
+**Consequences:** User clicks logout, stays on the current page with full access. No redirect. Looks like broken logout.
+
+**Prevention:**
+- Await `POST /auth/logout` before updating auth context.
+- On success (2xx), set `isAuthenticated: false` and call `navigate("/login")`.
+- Clear `SessionContext` state (`dale`, `overUnder` page states) on logout to prevent stale analysis data from being visible to the next login session.
+- Handle logout API failure gracefully: still clear local auth state and redirect. The JWT TTL will expire the cookie server-side anyway.
+
+**Detection:** Click logout. If the URL stays on the current page without redirect, this pitfall is active.
+
+**Phase:** Phase 2.
 
 ---
 
 ## Moderate Pitfalls
 
-### Pitfall 9: Combination Cache Keys Must Include the Set of Files, Not Just Individual File Hashes
-
-**What goes wrong:** The current cache key is `MD5(sorted file bytes + strategy)`. For pre-computation, the developer reuses the same formula for combinations. When the user uploads files A, B, C and the system pre-computes A+B+C, A+B, A+C, B+C, A, B, C — the combination A+B generates the same cache key as if the user had uploaded only A and B originally, because the key only depends on the files in the combination, not on the upload session. This is actually correct behavior, but if the cache key also incorporates any session state or timestamp, combinations will never hit the cache from a direct user request.
-
-**Why it happens:** Cache key design for combinations requires deliberate thought. The key must identify "these exact files combined with this strategy" independent of whether it was pre-computed or requested directly.
-
-**Prevention:** The existing `MD5(sorted file bytes + strategy)` formula is correct for this purpose — sorted file bytes ensure order independence, and the combination subset is just a different sorted set. Verify this explicitly: a pre-computed A+B cache key must match the key generated when a user later requests only A+B. Do not add any session ID, timestamp, or combination index to the key.
-
-**Warning signs:** Direct `/analyze` requests with files A+B return cache misses even after pre-computation. Cache hit rate stays at 0% after pre-computation completes.
-
-**Phase:** Async pre-computation phase (Phase 1).
-
 ---
 
-### Pitfall 10: Password Stored in Environment Variable Without Hashing
+### Pitfall 7: No Centralized 401 Handler — Silent Session Expiry After 12 Hours
 
-**What goes wrong:** The simplest implementation stores `LOGIN_PASSWORD=mysecret` in `.env` and compares it directly against the submitted password. If the `.env.prod` file is ever exposed (already a concern in CONCERNS.md — it is currently committed to git), the plaintext password is immediately compromised. Since there is one user and one password, this is a full account compromise.
+**What goes wrong:** The JWT TTL defaults to 720 minutes (12 hours) per `config/settings.py`. After expiry, every API call returns 401. The current `api.ts` throws `new Error(err?.detail ?? "Erro na análise: ${res.status}")` on non-ok responses — a generic error that displays as a toast or error div, not a redirect to `/login`. The user sees "Erro: 401" without understanding their session has expired.
 
-**Why it happens:** Single-user auth feels like it doesn't need the same rigor as multi-user. The developer sees bcrypt as "enterprise overhead."
+**Prevention:**
+- In the `apiFetch` wrapper, add a global 401 interceptor: if response status is 401, clear auth context and navigate to `/login`.
+- This handles both token expiry and any future auth failure without per-call handling.
 
-**Consequences:** Credential exposure from git history, log files, or env var leakage (Docker inspect, CI logs) directly yields admin access.
-
-**Prevention:** Store only the bcrypt hash of the password in the environment variable. At login, run `bcrypt.checkpw(submitted, stored_hash)`. The hash itself is useless to an attacker without the plaintext.
-
-```python
-import bcrypt
-# Generating the hash (run once, store the output in .env):
-# bcrypt.hashpw(b"mysecret", bcrypt.gensalt()).decode()
-
-# Verifying at login:
-stored_hash = settings.LOGIN_PASSWORD_HASH.encode()
-if not bcrypt.checkpw(password.encode(), stored_hash):
-    raise HTTPException(status_code=401, detail="Credenciais inválidas")
+```typescript
+async function apiFetch(url: string, options?: RequestInit): Promise<Response> {
+  const res = await fetch(url, { credentials: "include", ...options });
+  if (res.status === 401) {
+    authContext.setAuthenticated(false);
+    router.navigate("/login");
+  }
+  return res;
+}
 ```
 
-**Warning signs:** `.env` contains `LOGIN_PASSWORD=` (plaintext). Login handler uses `== password` comparison.
-
-**Phase:** Auth migration phase (Phase 3).
+**Phase:** Phase 2.
 
 ---
 
-### Pitfall 11: Background Task Orphaned on Server Restart — No Recovery
+### Pitfall 8: Login Page Remains Accessible to Authenticated Users
 
-**What goes wrong:** The VPS restarts or Docker restarts the container while a background pre-computation is running (covering 6 of 7 combinations). The status key in Redis shows `{"done": 6, "total": 7, "errors": []}` — never reaching completion. The frontend polls forever or shows a stale "in progress" state. The partial cache is valid but the user does not know the 7th combination failed.
+**What goes wrong:** After login, if the user navigates to `/login` manually, they see the login form again. Submitting it issues a new cookie, overwriting the current one. There is no UX feedback that they are already logged in.
 
-**Why it happens:** FastAPI `BackgroundTasks` runs in-process. When the process exits, tasks die without checkpoint or recovery. Redis retains whatever was written before the crash, but there is no re-queue mechanism.
+**Prevention:** On the `/login` route, check `isAuthenticated` in the auth context (after `isLoading` resolves). If `true`, redirect to `/` (or the route the user was trying to access before being sent to login, via `state.from` in the navigation).
 
-**Prevention:** 
-1. Add a `started_at` timestamp to the status key. If `now - started_at > timeout_threshold` and status is not complete, mark it as failed.
-2. Implement a cleanup endpoint or startup hook that scans for stale `status:` keys and marks them as `{"status": "failed", "reason": "server_restart"}`.
-3. Document this limitation explicitly — for this single-user use case, a "retry upload" UX is sufficient recovery.
-
-**Warning signs:** Redis contains `status:` keys with `done < total` from timestamps more than 5 minutes old.
-
-**Phase:** Async pre-computation phase (Phase 1).
+**Phase:** Phase 2.
 
 ---
 
-### Pitfall 12: JWT Secret Key Hardcoded or Too Short
+### Pitfall 9: `access_token` in Login Response Body Stored in JS-Accessible State
 
-**What goes wrong:** The developer sets `JWT_SECRET=supersecret` or `JWT_SECRET=changeme` in `.env`. Since `.env.prod` is already committed to git (CONCERNS.md Critical), and the JWT secret is the single point of failure for all session security, a weak or committed secret means tokens can be forged.
+**What goes wrong:** `routers/auth.py` returns `{"access_token": token, "token_type": "bearer"}` in the response body (intentionally, for Swagger compatibility). If the frontend login handler stores this token in React state, `localStorage`, or `sessionStorage`, the HttpOnly cookie's security benefit is negated — any XSS can now read the token from JS-accessible storage.
 
-**Why it happens:** JWT secret gets set once and forgotten. For a personal dashboard it feels like overhead.
+**Prevention:** The frontend login handler must call `POST /auth/login`, receive the 200 response, and ignore the `access_token` in the body. Rely entirely on the cookie the browser stores automatically. Do not `localStorage.setItem("token", data.access_token)` or put it in any React state.
 
-**Consequences:** With a known secret, an attacker can forge a valid JWT for any expiry without knowing the password. The entire login flow is bypassed.
+**Phase:** Phase 2.
 
-**Prevention:** Generate the secret with `openssl rand -hex 32` (256 bits). Never commit it to git. Remove `.env.prod` from the repo as part of auth migration (already recommended in CONCERNS.md).
+---
 
-**Warning signs:** `JWT_SECRET` value is shorter than 32 characters. The value matches any common test string (`secret`, `dev`, `changeme`).
+### Pitfall 10: Pre-compute Called With Stale `File` References
 
-**Phase:** Auth migration phase (Phase 3).
+**What goes wrong:** `POST /precompute` reads all uploaded `File` objects into `FormData`. If `files` state in `OverUnderPage` is updated by the user (removing or adding a file) between the time the button is clicked and the time `fetch` resolves, the `FormData` may contain incorrect files. This is the same stale closure risk that `handleAnalyze` already guards against via `ouRef.current`.
+
+**Prevention:** Snapshot the file list at the moment `POST /precompute` is triggered, identical to how `handleAnalyze` uses `ouRef.current.files`. Do not read from reactive state inside the async call.
+
+**Phase:** Phase 3.
+
+---
+
+### Pitfall 11: Vite Dev Proxy Missing — `FRONTEND_ORIGIN` Must Match Dev Port
+
+**What goes wrong:** Without the Vite proxy (see Pitfall 3), every API call in dev is cross-origin. CORS is required, and `FRONTEND_ORIGIN` must be set to `http://localhost:5173` (the exact Vite port) in the backend's `.env`. If Vite's port changes (e.g., port 5173 is busy and Vite picks 5174), all API calls break.
+
+**Prevention:** Either add the Vite proxy (recommended, eliminates this class of problem entirely) or pin Vite's port explicitly in `vite.config.ts` with `server: { port: 5173, strictPort: true }`.
+
+**Phase:** Phase 2 (dev environment setup).
 
 ---
 
 ## Minor Pitfalls
 
-### Pitfall 13: Pre-computation Triggered on Every Upload, Even Identical Files
+---
 
-**What goes wrong:** The user uploads the same 3 files twice (e.g., after refreshing the page). The background task is triggered again, re-computing all 7 combinations even though they already exist in Redis with 24h TTL.
+### Pitfall 12: Console Logs Exposing Auth State in Production
 
-**Prevention:** Before launching background pre-computation, check if all 7 combination cache keys already exist in Redis. If they do, skip computation and return the existing status immediately. The existing MD5-based cache key formula makes this check O(n) Redis lookups.
+**What goes wrong:** `api.ts` contains `console.log("[API] API_KEY definida:", !!API_KEY)` and multiple `console.log` / `console.warn` calls that log raw API responses. Adding similar debug logs for JWT state (e.g., logging the token value or auth context state) during development and forgetting to remove them before production deploy.
 
-**Phase:** Async pre-computation phase (Phase 1).
+**Prevention:** Remove all auth-related `console.log` calls as part of the migration commit. The existing `console.log("[API] BASE_URL:", BASE_URL)` and `console.log("[API] API_KEY definida:", !!API_KEY)` must both be deleted.
+
+**Phase:** Phase 2.
 
 ---
 
-### Pitfall 14: Session Cookie Expiry Not Aligned with JWT Expiry
+### Pitfall 13: Missing `replace` on Auth Redirect — Back Button Loops to Protected Route
 
-**What goes wrong:** The JWT has a 1-hour expiry but the cookie has `max_age=86400` (24 hours). The cookie persists in the browser for 24 hours, but after 1 hour the backend rejects requests with 401. The user sees an authenticated-looking UI (cookie is set) but all API calls fail.
+**What goes wrong:** If `<Navigate to="/login" />` does not include `replace`, the login redirect pushes a new history entry. After successful login, clicking the browser back button returns to the protected route's redirect — which sends the user back to `/login` again.
 
-**Prevention:** Set cookie `max_age` equal to the JWT `exp` claim. Or implement token refresh. For a single-user dashboard, a 24h JWT with a 24h cookie is the simplest correct configuration.
+**Prevention:** Always use `<Navigate to="/login" replace />` in route guards (and `navigate("/login", { replace: true })` in imperative redirects). This replaces the history entry instead of pushing, breaking the loop.
 
-**Phase:** Auth migration phase (Phase 3).
+**Phase:** Phase 2.
+
+---
+
+### Pitfall 14: Job Status `failed` State Has No User-Facing Error Message
+
+**What goes wrong:** `GET /jobs/{job_id}` returns `{"status": "failed", "error": "..."}` on failure. If the polling UI only checks for `completed` to show results and `pending`/`running` to show a spinner, a `failed` status is silently ignored — the spinner continues forever or disappears without explanation.
+
+**Prevention:** Explicitly handle the `failed` status in the polling UI: show an error message with the `error` field from the job response. Distinguish between "all jobs failed" (show an error state) and "some jobs failed, some completed" (show partial results with a warning).
+
+**Phase:** Phase 3.
 
 ---
 
@@ -290,30 +283,29 @@ if not bcrypt.checkpw(password.encode(), stored_hash):
 
 | Phase Topic | Likely Pitfall | Mitigation |
 |-------------|---------------|------------|
-| Async pre-computation | GIL blocks event loop with CPU-bound pandas | Use `run_in_threadpool`, not bare `async def` |
-| Async pre-computation | Silent background task failures | Write status to Redis; wrap in try/except; expose status endpoint |
-| Async pre-computation | Combinatorial memory explosion | Sequential computation, explicit `del` + `gc.collect()` between combinations |
-| Async pre-computation | Sync Redis calls amplified by 7x writes | Migrate to `redis.asyncio` before adding background tasks |
-| Async pre-computation | Task orphaned on restart | Add `started_at` + stale-detection logic to status key |
-| Filter removal | Stale filtered cache served to unfiltered-aware frontend | Flush `analysis:` + `export:` keys at deploy; coordinate frontend deploy |
-| Filter removal | Response size increase breaks frontend table rendering | Frontend must implement client-side filtering before backend filter removal |
-| Auth migration | JWT in localStorage exposes token to XSS | HttpOnly cookie only |
-| Auth migration | CORS `allow_origins=["*"]` opens CSRF attack surface | Lock down CORS to frontend domain before enabling cookie auth |
-| Auth migration | Swagger UI breaks with cookie auth | Keep Bearer token fallback for `/docs` testing |
-| Auth migration | Plaintext password in `.env` | Store bcrypt hash only |
-| Auth migration | Weak or committed JWT secret | 256-bit random secret, never in git |
+| Phase 2: Dev environment setup | Pitfall 3 (SameSite cross-port) | Add Vite proxy first, before writing any auth code |
+| Phase 2: API client migration | Pitfall 1 (X-API-Key residue) | Single-commit replacement; delete env var same day |
+| Phase 2: Auth context | Pitfall 2 (flash redirect) | `isLoading` state in context; ProtectedRoute renders null while loading |
+| Phase 2: Logout | Pitfall 6 (stale client state) | Await logout response, then clear context and navigate |
+| Phase 2: Token expiry | Pitfall 7 (silent 401) | Central 401 interceptor in `apiFetch` wrapper |
+| Phase 2: Login response body | Pitfall 9 (token in JS state) | Ignore token in response body; rely on cookie only |
+| Phase 2: History on redirect | Pitfall 13 (back button loop) | Always use `replace` on auth redirects |
+| Phase 2: CORS in production | Pitfall 4 (FRONTEND_ORIGIN wrong) | Verify exact value in Portainer before first deploy |
+| Phase 3: Pre-compute polling | Pitfall 5 (interval leak) | Single interval, cleanup on unmount and terminal state |
+| Phase 3: File snapshot | Pitfall 10 (stale File refs) | Snapshot files array at call time (same pattern as `ouRef`) |
+| Phase 3: Job failure UI | Pitfall 14 (failed state ignored) | Explicitly handle `failed` status in polling component |
 
 ---
 
 ## Sources
 
-- [FastAPI BackgroundTasks official docs](https://fastapi.tiangolo.com/tutorial/background-tasks/) — HIGH confidence
-- [Understanding Pitfalls of Async Task Management in FastAPI Requests](https://leapcell.io/blog/understanding-pitfalls-of-async-task-management-in-fastapi-requests) — MEDIUM confidence
-- [Managing Background Tasks and Long-Running Operations in FastAPI](https://leapcell.io/blog/managing-background-tasks-and-long-running-operations-in-fastapi) — MEDIUM confidence
-- [How I Handled Heavy Background Jobs in FastAPI Without Killing My API](https://medium.com/@connect.hashblock/how-i-handled-heavy-background-jobs-in-fastapi-without-killing-my-api-7cf4136af8de) — MEDIUM confidence (firsthand report)
-- [FastAPI Mistakes That Kill Your Performance](https://dev.to/igorbenav/fastapi-mistakes-that-kill-your-performance-2b8k) — MEDIUM confidence
-- [FastAPI Security — OAuth2 JWT](https://fastapi.tiangolo.com/tutorial/security/oauth2-jwt/) — HIGH confidence
-- [FastAPI Security Design Pitfalls](https://blog.greeden.me/en/2025/10/14/a-beginners-guide-to-serious-security-design-with-fastapi-authentication-authorization-jwt-oauth2-cookie-sessions-rbac-scopes-csrf-protection-and-real-world-pitfalls/) — MEDIUM confidence
-- [pandas thread safety and memory docs](https://pandas.pydata.org/docs/user_guide/gotchas.html) — HIGH confidence
-- [FastAPI Best Practices (zhanymkanov)](https://github.com/zhanymkanov/fastapi-best-practices) — MEDIUM confidence
-- Project CONCERNS.md — HIGH confidence (authoritative codebase audit)
+- CORS + credentials with `allow_credentials=True`: https://fastapi.tiangolo.com/tutorial/cors/ (HIGH confidence — official FastAPI docs)
+- `credentials: "include"` fetch behavior: https://zellwk.com/blog/fetch-credentials/ (MEDIUM confidence — verified against MDN)
+- `SameSite` cookie attribute spec: https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Set-Cookie (HIGH confidence — MDN)
+- React Router v7 protected routes: https://www.robinwieruch.de/react-router-private-routes/ (MEDIUM confidence)
+- Auth context race condition / `isLoading` guard: https://github.com/auth0/auth0-react/issues/343 (MEDIUM confidence — well-documented pattern)
+- `setInterval` cleanup in React: https://javascript.plainenglish.io/pitfalls-when-using-setinterval-in-react-72cf2c566b6a (MEDIUM confidence)
+- Declarative `setInterval` with hooks: https://overreacted.io/making-setinterval-declarative-with-react-hooks/ (HIGH confidence — Dan Abramov, React core team)
+- Stale closure in `setInterval`: https://react.dev/reference/react/useEffect (HIGH confidence — React official docs)
+- HttpOnly cookie logout: https://medium.com/@kartikey8604/handling-authentication-cookie-expiry-and-session-logout-using-axios-interceptors-in-reactjs-63a8c14825aa (MEDIUM confidence)
+- Codebase direct inspection: `api.ts`, `SessionContext.tsx`, `middleware/auth.py`, `routers/auth.py`, `routers/precompute.py`, `main.py`, `config/settings.py`, `vite.config.ts`, `routes.ts`, `OverUnderPage.tsx` (HIGH confidence)

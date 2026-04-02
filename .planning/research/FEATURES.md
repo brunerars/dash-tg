@@ -1,39 +1,51 @@
 # Feature Landscape
 
-**Domain:** Async task processing + auth for a single-user analytics API dashboard (FastAPI + Redis + pandas)
+**Domain:** Frontend JWT auth integration, route protection, pre-compute polling — React SPA
 **Researched:** 2026-04-02
-**Milestone scope:** 3 targeted improvements — async pre-computation of spreadsheet combinations, removal of backend filters, single-user login/password authentication
+**Milestone scope:** v2.0 — Integrar frontend React com JWT cookie auth, protecao de rotas, e polling de pre-computo Over/Under
+
+---
+
+## Context: What Already Exists (Do Not Re-Build)
+
+| Existing Feature | Location | Status |
+|-----------------|----------|--------|
+| API client using X-API-Key header | `services/api.ts` | Needs migration, not replacement |
+| SessionContext (in-memory page state) | `components/SessionContext.tsx` | Stable — no changes needed |
+| File upload + analysis flow (Dale + Over/Under) | `DalePage.tsx`, `OverUnderPage.tsx` | Stable — extend, do not rewrite |
+| Route definitions (react-router v7) | `routes.ts` — 4 routes, no guards | Needs guard wrapping |
+| Layout with sidebar | `Layout.tsx` | Needs logout button; no structural rewrite |
+| Results table, filters, blueprint | Various | No changes needed |
 
 ---
 
 ## Table Stakes
 
-Features users expect. Missing = product feels incomplete or broken.
+Features users expect. Missing = product feels broken or inaccessible.
 
-| Feature | Why Expected | Complexity | Notes |
-|---------|--------------|------------|-------|
-| Job status endpoint (`GET /jobs/{job_id}`) | User submits N files and walks away. Without status, they have no idea if computation is running, done, or crashed. | Medium | Must return: `pending`, `running`, `completed`, `failed` + error message on failure. Stores state in Redis under `job:{job_id}`. |
-| All combinations auto-triggered on upload | The stated core value is "user uploads files and already finds all results computed." If combinations require separate manual calls, the value prop breaks. | Medium | Upload endpoint enqueues all 2^N-1 combinations immediately. Returns `job_ids` list. |
-| Non-blocking upload response | Upload must return immediately (< 200ms). Computation at 150k rows × 7 combinations takes seconds to minutes. Blocking upload means timeouts and broken UX. | Low | `POST /analyze` returns `202 Accepted` with job IDs, not the result. |
-| Combination results retrievable by cache key | Once a job completes, frontend needs to retrieve results the same way it does today — by `cache_key`. API must be backward-compatible. | Low | On completion, job stores result under existing `analysis:{cache_key}` prefix. `GET /jobs/{job_id}` returns `cache_key` when status is `completed`. |
-| Password login endpoint (`POST /auth/login`) | Replacing API Key auth means a login endpoint is required. Without it there is no way to get a token. | Low | Returns a short-lived token (JWT or opaque session token stored in Redis). |
-| Token validation on protected endpoints | Every protected endpoint must reject requests with invalid or expired tokens. Behavior users expect from any login-protected API. | Low | FastAPI `Depends()` dependency, same pattern as the existing `verify_api_key`. |
-| Logout endpoint (`POST /auth/logout`) | Single-user system — user must be able to invalidate their session. Without this, the only option is token expiry. | Low | For JWT: blacklist token in Redis. For opaque token: delete key from Redis. |
-| Filters removed from backend response | Explicitly in project scope. Frontend cannot filter data that was never sent. All rows above 0 entries must be returned. | Low | Remove `min_jogos` and `min_green_pct` filter step from pipeline. Return full metrics DataFrame. |
-| Password stored as bcrypt hash | Storing plaintext password in `.env` is a security gap. Even for single-user. | Low | Use `pwdlib` (passlib is unmaintained as of 2025) with bcrypt. Hash stored in env or config at startup. |
+| Feature | Why Expected | Complexity | Depends On |
+|---------|--------------|------------|------------|
+| Login page (`/login`) | Backend now requires JWT. Without a login page, the app is permanently locked. | Low | — |
+| `credentials: "include"` on all API calls | JWT is an HttpOnly cookie. Without this flag, the browser never sends the cookie, every call gets 401, app is unusable. | Low | Login established first |
+| Redirect to `/login` on 401 | Backend now returns 401 instead of rejecting with API key error. Without a catch, user sees a blank error or crash. | Low | A way to detect 401 centrally (shared fetch wrapper) |
+| Route guard: all existing routes protected | Every existing page (`/`, `/dale`, `/over-under`, `/blueprint/:cacheKey`) requires auth. Without guards, unauthenticated users land on a broken dashboard (API calls 401, nothing loads). | Low | Auth state held somewhere (context or cookie check) |
+| Logout action | User session must be terminable. Without logout, token lives until expiry and there is no clean exit. | Low | `POST /auth/logout` endpoint (already built) |
+| Remove `VITE_API_KEY` env var and `X-API-Key` header | Old auth mechanism conflicts with new one. Leaving both creates confusion and two-path code. | Low | `credentials: "include"` working |
 
 ---
 
 ## Differentiators
 
-Features that go beyond the minimum and add real value for this specific product.
+Features that improve UX beyond the bare minimum for this product.
 
 | Feature | Value Proposition | Complexity | Notes |
 |---------|-------------------|------------|-------|
-| Bulk job status endpoint (`GET /jobs/status?ids=id1,id2,...`) | When N=3 files produce 7 jobs, polling 7 endpoints separately is wasteful. A single bulk check reduces frontend round-trips and simplifies progress rendering. | Low | Returns a map of `{job_id: status}`. Reads from Redis with pipeline for efficiency. |
-| Per-combination progress in upload response | Upload response includes which specific combinations were enqueued (`[A], [B], [C], [A,B], [A,C], [B,C], [A,B,C]`) with their `job_id` and pre-computed `cache_key`. Frontend can immediately attempt cache hits for combinations already computed in a prior session. | Low-Medium | `cache_key` for each combination is deterministic (MD5 of sorted file bytes + strategy). Frontend can poll or skip if already cached. |
-| Job queue bounded by Redis TTL | Jobs that never get picked up (worker crash, deploy) auto-expire from Redis instead of accumulating stale state forever. | Low | Set `job:{job_id}` with TTL equal to longest expected computation time + buffer (e.g., 2h). |
-| Configurable token expiry via env var | `TOKEN_TTL_SECONDS=3600` in `.env`. Allows tuning session lifetime without code change. Consistent with existing `CACHE_TTL_ANALYSIS` pattern in the project. | Low | Aligns with project constraint "keep infrastructure simple." |
+| Pre-compute auto-triggered on Over/Under file upload | Core value proposition: "user uploads and already finds results." Without this, Over/Under combinations are only computed on-demand (slow). With it, by the time user clicks Analyze, results are cached. | Medium | `POST /precompute` already built. Frontend needs to fire it immediately on file selection, not on Analyze button click. |
+| Job progress indicator during pre-compute | With 2^N-1 jobs running (e.g., 7 for 3 files), user needs feedback. A progress bar (X of Y jobs complete) reduces perceived wait time and confirms computation is happening. | Medium | Requires polling `GET /jobs/{job_id}` for each job_id returned by `/precompute`. |
+| Polling terminates cleanly | If user navigates away or changes files, orphaned polling intervals cause stale state updates and React warnings. | Low-Medium | useEffect cleanup + abort on unmount / file change. |
+| Auth context with `isAuthenticated` flag | Components that need to conditionally render logout buttons or username need a central state source. Checking cookies directly from JS is not possible (HttpOnly). An auth context that calls `GET /strategies` (or a dedicated `/auth/me`) to verify cookie validity on mount is the idiomatic pattern. | Low | One auth-check call on app mount; errors caught globally |
+| Login form: show password toggle | Single-user dashboard — no autocomplete, often typed manually. Show/hide password button reduces friction. | Low | Pure UI, no API dependency |
+| "Sessao expirada" toast on 401 mid-session | User starts working, session expires, clicks Analyze. Raw 401 redirect is abrupt. A brief toast ("Sessao expirada — redirecionando para login") before redirect is smoother. | Low | Interceptor in fetch wrapper |
 
 ---
 
@@ -43,82 +55,172 @@ Features to explicitly NOT build in this milestone.
 
 | Anti-Feature | Why Avoid | What to Do Instead |
 |--------------|-----------|-------------------|
-| Multi-user / registration system | Out of scope per PROJECT.md. Single client. Adding user management means a database, password reset flows, and role management — weeks of scope creep. | Hard-code one username/password hash in env config. |
-| OAuth2 / social login | Unnecessary for a single internal user. OAuth requires callback URLs, external provider dependencies, and redirect flows that don't fit a backend-only API. | Simple `POST /auth/login` with username+password form. |
-| Pre-computation for eSoccer — Dupla strategy | PROJECT.md explicitly excludes this. The performance problem is specific to Over/Under with ~150k rows. Adding DALE would double scope for no identified need. | Only enqueue combinations for `Over/HT — Dupla + Linha`. |
-| Celery / RabbitMQ for task queue | Celery requires a broker (RabbitMQ or separate Redis database), a separate worker process, and Celery beat for scheduling. This project's constraint is "maintain existing Docker Compose with api + redis." A simpler solution (FastAPI BackgroundTasks + asyncio + ProcessPoolExecutor, OR ARQ with Redis) achieves the same outcome. | Use FastAPI `BackgroundTasks` with `ProcessPoolExecutor` for CPU-bound pandas work, or ARQ if retry/persistence is needed. Both run against the existing Redis instance. |
-| Real-time WebSocket job updates | Adds socket management complexity, connection state, reconnection logic. For 7 background jobs that complete in under 30 seconds, polling every 2-3 seconds is sufficient and simpler. | Polling pattern: frontend polls `GET /jobs/{job_id}` until `completed` or `failed`. |
-| Persistent job history / audit log | Storing every job result beyond the analysis TTL (24h) requires a database or growing Redis memory. The product has no requirement to review historical computation runs. | Jobs expire from Redis along with their results per existing TTL policy. |
-| Refresh tokens | Single-user system. If the session expires, logging in again costs one HTTP call. Refresh token rotation adds implementation complexity (rotation, revocation, replay detection) with no benefit at this scale. | Short-lived access token. User logs in again when it expires. |
-| Password reset / recovery flow | No second user to notify. No email infrastructure. The operator changes the `.env` variable directly. | Document env var name in README. |
+| Refresh token rotation in frontend | Backend does not issue refresh tokens (single short-lived JWT per login). Frontend managing refresh logic that doesn't exist on the backend wastes time and creates mismatched state. | Re-login on 401. Session expiry is acceptable for a single-user internal tool. |
+| Remember-me / persistent login checkbox | Backend JWT expiry is fixed in env config. Frontend has no way to extend it client-side. HttpOnly cookie is automatically persistent across browser restart if `max_age` is set (backend already sets it). | No UI needed — cookie persistence is controlled by backend `max_age`. |
+| Optimistic UI for pre-compute (faking completion) | If frontend shows "computed" before jobs are actually done and user clicks Analyze immediately, they get a cache miss and wait anyway. | Show real job status. Only mark complete when all jobs return `completed` or `failed`. |
+| WebSocket for job updates | 7 jobs completing in under 30 seconds. Polling at 2-second intervals costs 3-4 round trips per job. WebSocket adds reconnection logic and backend plumbing for no gain. | Polling with 2s interval, exponential backoff optional. |
+| Dedicated `/auth/me` endpoint call on every route render | Calling auth-check on each route change causes flicker (unauthenticated flash) and extra round trips. | Single check on app mount, result cached in React context. |
+| Multi-tab auth sync | Single internal user with a single browser session. `BroadcastChannel` / `storage` event listeners for auth sync add complexity with no identified need. | Ignore. |
+| Pre-compute for Dale (eSoccer — Dupla) | Explicitly out of scope in PROJECT.md. DALE performance is acceptable without pre-computation. | DALE upload triggers only the standard `/analyze` flow. |
 
 ---
 
 ## Feature Dependencies
 
 ```
-Password login (POST /auth/login)
-  --> Token validation dependency
-       --> All protected endpoints (replaces verify_api_key)
+Auth Context (AuthProvider, useAuth hook)
+  --> Login Page (/login route, POST /auth/login)
+  --> Route Guard (ProtectedRoute wrapper component)
+       --> All existing routes stay inside guard
+  --> Logout button in Layout/Sidebar (POST /auth/logout)
 
-Upload files (POST /analyze or new POST /precompute)
-  --> Combination enumeration (powerset of N files)
-       --> Per-combination cache_key generation (deterministic MD5)
-            --> Background job enqueue (one job per combination)
-                 --> Job status storage in Redis (job:{job_id})
-                      --> Job status endpoint (GET /jobs/{job_id})
-                           --> Result retrieval by cache_key (existing GET /export/{cache_key})
+API Client migration
+  --> Remove authHeaders / VITE_API_KEY
+  --> Add credentials: "include" to all fetch() calls
+  --> Add central 401 interceptor (redirect or toast + redirect)
+       --> Depends on AuthContext to trigger logout state
 
-Backend filter removal (min_jogos, min_green_pct)
-  --> No dependencies — standalone change to pipeline Step 5
-  --> BLOCKS frontend filter implementation (frontend work, out of scope for this milestone)
+Pre-compute flow (Over/Under only)
+  --> Triggered on file selection (not on Analyze button)
+       --> POST /precompute called with selected files
+            --> job_ids[] returned
+                 --> Polling loop: GET /jobs/{job_id} every 2s per job_id
+                      --> On all completed: cache is warm, Analyze button triggers cache hit
+                      --> On any failed: show error, Analyze button still works (computes fresh)
+  --> Polling state stored in local component state (not SessionContext)
+  --> Polling must be cleaned up on component unmount and file change
 ```
+
+---
+
+## Implementation Notes
+
+### Auth Check on Mount (Table Stakes)
+
+The backend backend serves HttpOnly cookies — JavaScript cannot read `document.cookie` to check auth state. The idiomatic approach:
+
+1. On `App` mount, call any authenticated endpoint (e.g., `GET /strategies`).
+2. If 200: user is authenticated, set `isAuthenticated = true`.
+3. If 401: set `isAuthenticated = false`, render `<Navigate to="/login" />`.
+4. While pending: render a loading spinner (avoids unauthenticated flash to protected routes).
+
+This avoids a dedicated `/auth/me` endpoint (which doesn't exist on the backend) and reuses an endpoint the app already calls at startup.
+
+**Confidence:** HIGH — standard React SPA pattern with HttpOnly cookies.
+
+### Route Guard Pattern (Table Stakes, Low Complexity)
+
+React Router v7 uses the same component-based guard pattern as v6:
+
+```tsx
+// ProtectedRoute.tsx
+function ProtectedRoute() {
+  const { isAuthenticated, isLoading } = useAuth();
+  if (isLoading) return <LoadingSpinner />;
+  if (!isAuthenticated) return <Navigate to="/login" replace />;
+  return <Outlet />;
+}
+```
+
+In `routes.ts`, wrap the existing Layout route:
+```tsx
+{ path: "/", Component: ProtectedRoute, children: [
+  { path: "/", Component: Layout, children: [...existing routes] }
+]}
+{ path: "/login", Component: LoginPage }
+```
+
+The login route must sit outside the guard — otherwise `/login` itself is protected and you have an infinite redirect loop.
+
+**Confidence:** HIGH — official React Router v7 pattern, no behavior change from v6 for this use case.
+
+### Central 401 Handling (Table Stakes, Low Complexity)
+
+All fetch calls in `services/api.ts` should funnel through a shared wrapper that checks `res.status === 401` and calls a provided callback (trigger logout + redirect). Pass the callback from the auth context or use a module-level setter pattern.
+
+Option A (simpler): Module-level `onUnauthorized` callback set by `AuthProvider` on mount:
+```ts
+// api.ts
+let onUnauthorized: (() => void) | null = null;
+export function setUnauthorizedHandler(fn: () => void) { onUnauthorized = fn; }
+
+// in every API function:
+if (res.status === 401) { onUnauthorized?.(); throw new Error("Unauthorized"); }
+```
+
+Option B: Custom `useFetch` hook that wraps fetch and injects auth context. More idiomatic React, but requires refactoring all call sites.
+
+Recommendation: Option A. All API calls are already centralized in `services/api.ts` — adding the 401 check there means zero changes to any component.
+
+**Confidence:** HIGH — pattern used in production React SPAs.
+
+### Pre-Compute Polling (Differentiator, Medium Complexity)
+
+Key facts from backend code (`routers/precompute.py`):
+- `POST /precompute` accepts N files, returns `{ job_ids: string[], total_jobs: number }`.
+- `GET /jobs/{job_id}` returns `{ status: "pending"|"running"|"completed"|"failed", cache_key?: string, error?: string }`.
+- There is no bulk jobs endpoint. Frontend must poll each `job_id` individually.
+- Jobs run in a `ThreadPoolExecutor` (max 2 workers). With 7 combinations, the first 2 run immediately; remaining 5 queue.
+- `completed` jobs include `cache_key` — this is the same key `POST /analyze` would generate for the same file set + strategy, so subsequent `/analyze` calls will hit the cache.
+
+Polling strategy:
+- Start polling all job_ids simultaneously (not sequentially).
+- `setInterval` per job, clear on `completed` or `failed`.
+- Aggregate status: `{ pending: N, running: N, completed: N, failed: N }`.
+- Show progress: `completed / total_jobs` as a progress bar.
+- Stop all polling when `completed + failed === total_jobs`.
+- Clean up all intervals in useEffect return callback.
+
+When to trigger `POST /precompute`:
+- On `files` state change in `OverUnderPage` (not on Analyze button).
+- If files change mid-session, cancel previous job polling and start fresh.
+
+**Confidence:** HIGH — derived directly from reading `routers/precompute.py`.
+
+### `credentials: "include"` Migration (Table Stakes, Low Complexity)
+
+Current `services/api.ts` uses:
+```ts
+const authHeaders = { "X-API-Key": API_KEY };
+// ...
+const res = await fetch(`${BASE_URL}/analyze`, { method: "POST", headers: authHeaders, body: form });
+```
+
+Migration removes `authHeaders` entirely and adds `credentials: "include"` to every `fetch()` call. CORS on the backend is already locked to `FRONTEND_ORIGIN` with `allow_credentials=true` (confirmed in PROJECT.md). No backend changes needed.
+
+Also remove `VITE_API_KEY` from `.env` and from the `console.log` statements that expose it.
 
 ---
 
 ## MVP Recommendation
 
-For this milestone, prioritize in this order:
+Build in this order (each phase is independently shippable):
 
-1. **Backend filter removal** — No dependencies, zero risk, immediate. Unblocks frontend.
-2. **Single-user login/password auth** — Self-contained. Replaces existing `verify_api_key`. Requires: `POST /auth/login`, `POST /auth/logout`, updated dependency on protected endpoints. No external dependencies beyond `pwdlib` and a `.env` entry.
-3. **Async pre-computation** — Most complex, most impactful. Requires: combination enumeration logic, background task execution with ProcessPoolExecutor (pandas is CPU-bound — event loop must not be blocked), job status storage in Redis, `GET /jobs/{job_id}` endpoint.
+1. **Auth flow** (login page + route guard + logout) — Unlocks the app for production use with new backend. No other feature can be tested without this.
+   - AuthProvider context
+   - `POST /auth/login` call
+   - ProtectedRoute wrapper in routes.ts
+   - Login page component
+   - Logout in sidebar/header
+   - `credentials: "include"` + remove X-API-Key
 
-Defer (not in this milestone):
-- Bulk job status endpoint: nice-to-have, can be added after core job polling works.
-- Per-combination label in upload response: add after basic job IDs work correctly.
+2. **Central 401 handling** — Prevents silent failures on token expiry mid-session. Pairs with auth flow above.
 
----
+3. **Pre-compute integration on Over/Under** — Core value prop. After auth works, add:
+   - `POST /precompute` on file selection
+   - Polling `GET /jobs/{job_id}` per job
+   - Progress indicator in OverUnderPage
 
-## Complexity Notes
-
-### Async pre-computation: why CPU-bound matters
-
-The pipeline (load → normalize → deduplicate → metrics) is dominated by pandas operations on ~150k rows per combination. pandas releases and re-acquires the GIL inconsistently. The safe assumption is CPU-bound.
-
-**FastAPI `BackgroundTasks` limitation:** Runs in the same event loop as request handling. A long pandas computation will starve the event loop, making health checks and other endpoints unresponsive during computation.
-
-**Correct approach:** Wrap the pipeline computation in `asyncio.get_event_loop().run_in_executor(ProcessPoolExecutor(...), ...)` inside the background task. This offloads CPU work to a separate OS process, bypassing the GIL and keeping the event loop free.
-
-**Alternative:** ARQ (async task queue built on Redis). Adds a separate worker process and job persistence with retries. More robust but increases operational complexity (second process in Docker Compose). Warranted if the computation is unreliable or needs retry semantics.
-
-**Recommendation:** Start with `BackgroundTasks` + `ProcessPoolExecutor`. The existing Redis instance handles job state. Migrate to ARQ only if retry requirements emerge.
-
-### Auth: pwdlib over passlib
-
-passlib is unmaintained as of 2025 (confirmed by FastAPI's own GitHub discussion #11773). FastAPI's current documentation examples have moved to `pwdlib`. Use `pwdlib[argon2]` or `pwdlib[bcrypt]` — bcrypt is the safer bet for compatibility.
-
-For single-user with no database: store `USERNAME` and `HASHED_PASSWORD` in `.env`. Hash is computed once (CLI script or startup check) and stored. No database, no migration, no ORM.
+Defer: login form UX polish (show/hide password, error styling) — functional first, polish after.
 
 ---
 
 ## Sources
 
-- [FastAPI BackgroundTasks official docs](https://fastapi.tiangolo.com/tutorial/background-tasks/)
-- [Managing Background Tasks in FastAPI: BackgroundTasks vs ARQ + Redis](https://davidmuraya.com/blog/fastapi-background-tasks-arq-vs-built-in/)
-- [FastAPI BackgroundTasks vs Celery vs ARQ](https://medium.com/@komalbaparmar007/fastapi-background-tasks-vs-celery-vs-arq-picking-the-right-asynchronous-workhorse-b6e0478ecf4a) — MEDIUM confidence (WebSearch, not verified with official docs)
-- [FastAPI OAuth2 with Password and JWT — official docs](https://fastapi.tiangolo.com/tutorial/security/oauth2-jwt/)
-- [passlib maintenance concern — FastAPI GitHub discussion #11773](https://github.com/fastapi/fastapi/discussions/11773) — HIGH confidence (official GitHub)
-- [ARQ documentation](https://arq-docs.helpmanual.io/)
-- [FastAPI asyncio run_in_executor for CPU-bound tasks — Sentry](https://sentry.io/answers/fastapi-difference-between-run-in-executor-and-run-in-threadpool/) — MEDIUM confidence
-- [Celery vs ARQ for Python task queues — Leapcell](https://leapcell.io/blog/celery-versus-arq-choosing-the-right-task-queue-for-python-applications) — MEDIUM confidence (WebSearch)
+- React Router v7 official docs: route protection patterns — HIGH confidence
+- `routers/precompute.py` (codebase) — `POST /precompute` and `GET /jobs/{job_id}` contracts — HIGH confidence
+- `routers/auth.py` (codebase) — cookie name `access_token`, HttpOnly, SameSite=Lax, max_age — HIGH confidence
+- `middleware/auth.py` (codebase) — dual-mode auth (cookie + Bearer header) — HIGH confidence
+- `services/api.ts` (codebase) — current fetch pattern, authHeaders, all call sites — HIGH confidence
+- `routes.ts` (codebase) — current route structure, no guards — HIGH confidence
+- React SPA HttpOnly cookie auth patterns — MEDIUM confidence (WebSearch-consistent with official React/browser docs)

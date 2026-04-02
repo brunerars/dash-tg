@@ -1,199 +1,249 @@
 # Technology Stack
 
-**Project:** dash-tg — Melhorias v2 (async pre-computation, auth migration, filter removal)
+**Project:** Dashboard TG — Frontend Integration v2 (JWT auth UI, route guards, pre-compute polling)
 **Researched:** 2026-04-02
-**Scope:** Additive libraries only — existing FastAPI + Redis + pandas stack unchanged
+**Scope:** What stack additions/changes are needed for the new frontend features?
 
 ---
 
-## Context
+## Verdict: Zero New Libraries Required
 
-This is a brownfield FastAPI + Redis project. Three features are being added:
-
-1. **Async pre-computation** of all 2^n-1 file combinations for Over/Under strategy
-2. **Filter removal** from backend (min_jogos, min_green_pct move to frontend) — no new library needed
-3. **Single-user login/password auth** replacing API Key header auth
-
-The existing stack (FastAPI, pandas, openpyxl, redis-py, uvicorn) stays intact. Only net-new dependencies are introduced.
+Every capability needed for JWT cookie auth, route protection, and pre-compute polling is already
+present in the existing dependency tree. Zero new `npm install` calls.
 
 ---
 
-## Recommended Stack
+## Existing Stack (Confirmed From package.json)
 
-### Feature 1: Async Background Task Queue
+| Technology | Version | Role |
+|---|---|---|
+| React | 18.3.1 | UI runtime (peerDependency) |
+| Vite | 6.3.5 | Build tool |
+| react-router | 7.13.0 | Routing + navigation |
+| react-hook-form | 7.55.0 | Form state + validation |
+| shadcn/ui (Radix) | various | UI component library |
+| @radix-ui/react-progress | 1.1.2 | Progress bar component |
+| sonner | 2.0.3 | Toast notifications |
+| native fetch() | Browser | HTTP client |
+| React Context | 18.3.1 | App-wide state (SessionContext) |
 
-| Technology | Version | Purpose | Why |
-|------------|---------|---------|-----|
-| SAQ | 0.26.3 | Async task queue backed by Redis | Actively maintained (Mar 2026), built on asyncio, uses Redis as sole broker — no new infra. Worker runs as second process in Docker Compose. Sub-5ms job pickup via BLMOVE (no polling). Includes optional web UI. |
+---
 
-**Why SAQ over alternatives:**
+## Feature-by-Feature Analysis
 
-- **vs FastAPI BackgroundTasks (built-in):** Built-in tasks run in-process and have no persistence. If the API container restarts mid-computation, all enqueued combinations are lost. For 150k-row datasets and up to 7 combinations per upload, this is unacceptable. Rule out.
-- **vs ARQ 0.27.0:** ARQ is in explicit "maintenance-only" mode (confirmed GitHub issue #437). The ARQ maintainer moved it under `python-arq` org and stated no new features. SAQ is ARQ's spiritual successor — same Redis-only broker model, same asyncio-native design, actively developed, lower latency, built-in job status API, and an optional monitoring UI. SAQ's comparison docs explicitly list improvements over ARQ. Prefer SAQ.
-- **vs Celery:** Celery is synchronous at its core — async support is bolted on. Requires a second broker (Redis or RabbitMQ) AND a result backend. Heavy for a single-VPS single-user app. Adds broker/worker operational complexity that is not justified here. Rule out.
-- **vs RQ:** Synchronous, no asyncio support. Rule out.
+### 1. Login Page (POST /auth/login)
 
-**Installation:**
+**Backend contract** (from `routers/auth.py`):
+- `POST /auth/login` — JSON body `{username, password}` — sets HttpOnly cookie `access_token`, returns `{access_token, token_type: "bearer"}`
+- `POST /auth/logout` — deletes cookie
+- Cookie: `httponly=True, samesite="lax"`, `secure` controlled by `SECURE_COOKIES` env var
 
-```bash
-pip install "saq[redis]"
+| Capability | Library | Version | Status |
+|---|---|---|---|
+| Form state + validation | react-hook-form | 7.55.0 | Existing |
+| Input + Label + Button components | shadcn/ui (Radix) | various | Existing, in `ui/input.tsx` etc. |
+| POST with JSON body | native fetch() | — | Existing |
+| Cookie receipt | Browser (automatic) | — | No library needed |
+| Redirect after login | react-router `useNavigate` | 7.13.0 | Existing |
+| Error display | sonner toast | 2.0.3 | Existing |
+
+`credentials: "include"` is NOT needed for the login call itself — the login endpoint sets the
+cookie via `Set-Cookie` response header, which the browser stores automatically regardless of
+credentials mode. Only subsequent authenticated calls need `credentials: "include"`.
+
+**No new library needed.**
+
+---
+
+### 2. API Client Migration (X-API-Key header → HttpOnly cookie)
+
+**Current pattern in `api.ts`:**
+```ts
+const authHeaders = { "X-API-Key": API_KEY };
+// every call: fetch(url, { headers: authHeaders })
 ```
 
-**Worker deployment pattern (Docker Compose):**
-
-Add a `worker` service to `docker-compose.yml` that runs `python -m saq worker_settings.WorkerSettings`. The worker shares the same Redis service — no extra infra.
-
-**Job status tracking pattern:**
-
-SAQ enqueue returns a `Job` object with an `.id`. The API stores `precompute:{upload_id}` metadata in Redis (JSON hash: `{status, combinations_total, combinations_done, results_keys[]}`). The frontend polls `GET /precompute/status/{upload_id}`. Worker updates the Redis hash after each combination completes.
-
-This pattern avoids coupling the status store to SAQ internals — the frontend gets deterministic progress without depending on SAQ's internal job model.
-
-**Confidence:** MEDIUM-HIGH — SAQ version and features verified via PyPI (0.26.3, Mar 2026) and official docs. ARQ maintenance-only status verified via GitHub. The specific "store progress metadata directly in Redis" pattern is inferred from common FastAPI + Redis patterns, not a specific authoritative source for this project's use case.
-
----
-
-### Feature 3: Single-User Login/Password Auth
-
-| Technology | Version | Purpose | Why |
-|------------|---------|---------|-----|
-| PyJWT | 2.12.1 | JWT token generation and verification | FastAPI officially migrated docs from python-jose to PyJWT (PR #11589). python-jose is abandoned (last release 2021, 8 security warnings). PyJWT is production/stable, actively maintained (2.12.1 released Mar 2026), focuses on exactly what is needed. |
-| pwdlib | 0.3.0 | Password hashing | FastAPI docs migrated from passlib to pwdlib. passlib breaks on Python 3.13+. pwdlib wraps battle-tested argon2-cffi/bcrypt implementations, actively maintained (0.3.0 released Oct 2025). Use argon2 algorithm (current OWASP recommended). |
-| starsessions | 2.2.1 | Redis-backed server-side sessions | Stores session ID in httponly cookie, session data in Redis. Supports Redis backend natively. The session ID in cookie = opaque token; all state stays server-side. Last release Oct 2024. |
-
-**Auth architecture decision — JWT vs sessions:**
-
-Two viable patterns exist for single-user FastAPI auth without a database:
-
-- **JWT in httponly cookie:** Login endpoint issues a signed JWT (PyJWT), stored in httponly+Secure+SameSite=Lax cookie. No server-side state. Logout is client-side (cookie deletion). Cannot revoke a token server-side without a Redis blocklist.
-- **Session ID in cookie + Redis session store:** Login stores session data in Redis with TTL; cookie holds an opaque UUID. Logout deletes the Redis key — true server-side invalidation. Requires starsessions or equivalent.
-
-**Recommendation: JWT in httponly cookie (no starsessions needed).**
-
-Rationale: Single-user system with no revocation requirement. If the user logs out, they delete the cookie. Redis blocklist adds complexity for zero benefit here. PyJWT alone is sufficient — no starsessions dependency. The existing Redis instance is not needed for sessions.
-
-Drop starsessions from the dependencies unless revocation becomes a requirement.
-
-**Revised minimal auth stack:**
-
-| Technology | Version | Purpose | Why |
-|------------|---------|---------|-----|
-| PyJWT | 2.12.1 | JWT sign/verify | See above |
-| pwdlib[argon2] | 0.3.0 | Hash stored password | See above |
-
-**Implementation pattern:**
-
-```python
-# config/settings.py — add:
-AUTH_USERNAME = os.getenv("AUTH_USERNAME")
-AUTH_PASSWORD_HASH = os.getenv("AUTH_PASSWORD_HASH")  # pre-hashed with pwdlib
-JWT_SECRET = os.getenv("JWT_SECRET")  # random 32+ byte hex
-JWT_ALGORITHM = "HS256"
-JWT_EXPIRE_HOURS = 24
-
-# POST /auth/login — verifies password, returns JWT in httponly cookie
-# GET /auth/logout — clears cookie
-# Dependency: verify_session() replaces verify_api_key() on protected routes
-#   reads JWT from cookie, validates signature and expiry
+**Target pattern:**
+```ts
+// every call: fetch(url, { credentials: "include" })
+// on 401 response: clear auth state, redirect to /login
 ```
 
-The existing `verify_api_key` dependency in `middleware/auth.py` is replaced by `verify_session`. Backward-compat: keep API Key auth on routes that the existing frontend calls until the frontend migrates. Both dependencies can coexist during transition.
+| Capability | Library | Status |
+|---|---|---|
+| Cookie attachment on requests | `fetch(..., { credentials: "include" })` | Browser native |
+| 401 response handling | Existing `if (!res.ok)` checks | Add `res.status === 401` branch |
+| Token storage | None — HttpOnly cookie (browser-managed) | No client-side storage needed |
 
-**Confidence:** HIGH — PyJWT version confirmed via PyPI (2.12.1, Mar 2026). pwdlib version confirmed via PyPI (0.3.0, Oct 2025). FastAPI doc migration to both confirmed via official PRs. JWT-in-httponly-cookie pattern is well-documented in FastAPI ecosystem.
+**CORS dependency:** `credentials: "include"` requires backend CORS `allow_credentials=True` with
+a non-wildcard `allow_origins`. Backend already has this — CORS is locked to `FRONTEND_ORIGIN`
+(confirmed from Phase 02-02 git commits).
 
----
+**Cleanup:** `VITE_API_KEY` env var becomes dead config after migration. Remove from `.env` and
+from the `api.ts` module. No replacement needed.
 
-### Feature 2: Filter Removal (no new library)
-
-Moving `min_jogos` and `min_green_pct` filters from `routers/analysis.py` to the frontend requires no new backend dependency. The pipeline already computes metrics for all groups — the filter is a single `df[df[...] >= threshold]` call that gets removed. The response payload grows (more rows returned), but the serialization path is unchanged.
-
-**Confidence:** HIGH — this is a code deletion, not an addition.
-
----
-
-## Alternatives Considered
-
-| Category | Recommended | Alternative | Why Not |
-|----------|-------------|-------------|---------|
-| Task queue | SAQ 0.26.3 | ARQ 0.27.0 | ARQ is maintenance-only; SAQ is its active successor |
-| Task queue | SAQ 0.26.3 | Celery | Synchronous core, requires extra broker, overengineered for single-VPS single-user |
-| Task queue | SAQ 0.26.3 | FastAPI BackgroundTasks | No persistence, lost on restart, no status tracking |
-| JWT library | PyJWT 2.12.1 | python-jose | Abandoned since 2021, 8 CVEs, FastAPI removed from docs |
-| Password hashing | pwdlib 0.3.0 | passlib | Breaks Python 3.13+, unmaintained |
-| Session store | (none) | starsessions | Unnecessary complexity for single-user JWT auth |
-| Session store | (none) | fastapi-users | Full multi-user framework — overkill for one hardcoded user |
+**No new library needed.**
 
 ---
 
-## Full Dependency Delta
+### 3. Route Protection (redirect to /login on unauthenticated access)
 
-Only these packages are added to `requirements.txt`:
+**Current `routes.ts`:** `createBrowserRouter` with single `Layout` at `/` and four child routes.
+No auth state exists in the app — `SessionContext.tsx` only tracks page-level data (files,
+results, filters).
 
-```
-# Async task queue (pre-computation feature)
-saq[redis]>=0.26.3
+**Recommended approach — AuthGuard component + AuthContext:**
 
-# Auth (login/password feature)
-PyJWT>=2.12.1
-pwdlib[argon2]>=0.3.0
-```
+Two concerns to separate:
 
-All other existing dependencies (fastapi, pandas, openpyxl, redis, uvicorn, python-multipart, python-dotenv) remain unchanged.
+1. **AuthContext** (new, ~30 lines): Holds `isAuthenticated: boolean`, `login()`, `logout()`,
+   and a `checkAuth()` probe called on app load. The probe calls `GET /strategies` with
+   `credentials: "include"` — if it returns 200, the user has a valid cookie; if 401, they do not.
+   No `/auth/me` endpoint is needed (no such endpoint exists on the backend currently).
 
----
+2. **AuthGuard component** (new, ~15 lines): Reads `isAuthenticated` from `AuthContext`. If
+   false and auth check has completed, renders `<Navigate to="/login" />`. If check is in progress,
+   renders a loading state. Used as a wrapper in the route tree.
 
-## Environment Variable Delta
-
-```env
-# Auth — add to .env
-AUTH_USERNAME=admin
-AUTH_PASSWORD_HASH=<generated with pwdlib at setup>
-JWT_SECRET=<random 64-char hex>
-JWT_EXPIRE_HOURS=24
-
-# Pre-computation worker — no new vars; uses existing REDIS_URL
-# Optional: PRECOMPUTE_TTL=86400  (default same as CACHE_TTL_ANALYSIS)
-```
-
----
-
-## Docker Compose Delta
-
-```yaml
-services:
-  api:
-    # ... unchanged
-
-  worker:
-    build: .
-    command: python -m saq worker_settings.WorkerSettings
-    env_file: .env
-    depends_on:
-      - redis
-    restart: unless-stopped
-
-  redis:
-    # ... unchanged
+**Route tree change:**
+```ts
+createBrowserRouter([
+  { path: "/login", Component: LoginPage },   // public route
+  {
+    path: "/",
+    Component: AuthGuard,                      // new wrapper
+    children: [
+      {
+        Component: Layout,
+        children: [
+          { index: true, Component: HomePage },
+          { path: "dale", Component: DalePage },
+          { path: "over-under", Component: OverUnderPage },
+          { path: "blueprint/:cacheKey", Component: BlueprintPage },
+        ],
+      },
+    ],
+  },
+])
 ```
 
-The worker service uses the same Docker image as the API — no new Dockerfile needed. It shares the Redis instance via `REDIS_URL`.
+| Capability | Library | Version | Status |
+|---|---|---|---|
+| Nested route wrapper | react-router | 7.13.0 | Existing |
+| Redirect component | `<Navigate>` from react-router | 7.13.0 | Existing |
+| Auth state | React Context | 18.3.1 | New AuthContext (no new library) |
+| Auth probe request | native fetch() | — | Existing |
+
+**No new library needed.**
+
+---
+
+### 4. Pre-Compute Polling (POST /precompute + GET /jobs/{job_id})
+
+**Backend contract** (from `routers/precompute.py`):
+- `POST /precompute` (202) — multipart/form-data with files → `{job_ids: string[], total_jobs: number}`
+- `GET /jobs/{job_id}` → `{status: "pending"|"running"|"completed"|"failed", cache_key?: string, error?: string}`
+
+**Flow:** OverUnderPage uploads files → calls POST /precompute → receives N job_ids → polls each
+job_id every 2 seconds → when all terminal (completed/failed), stops polling. The user does not
+need to wait for all jobs to finish before running `/analyze` — a cache hit will occur for their
+specific file combination as soon as that job is done.
+
+| Capability | Library | Version | Status |
+|---|---|---|---|
+| POST /precompute (multipart) | native fetch() | — | Existing pattern (same as /analyze) |
+| Polling loop | `useEffect` + `setInterval` | React 18.3.1 | Existing |
+| Job state array | `useState` | React 18.3.1 | Existing |
+| Progress display | @radix-ui/react-progress | 1.1.2 | Existing, in `ui/progress.tsx` |
+| Stop condition | `useRef` for interval ref | React 18.3.1 | Existing |
+| Completion/error toast | sonner | 2.0.3 | Existing |
+
+**Polling implementation pattern** (~25 lines, no external library):
+```ts
+// Pseudocode — not final implementation
+useEffect(() => {
+  if (jobIds.length === 0) return;
+  const id = setInterval(async () => {
+    const statuses = await Promise.all(jobIds.map(id => fetchJobStatus(id)));
+    setJobStatuses(statuses);
+    const allDone = statuses.every(s => s.status === "completed" || s.status === "failed");
+    if (allDone) clearInterval(id);
+  }, 2000);
+  return () => clearInterval(id);
+}, [jobIds]);
+```
+
+**Why not react-query/SWR:** Those libraries add ~50KB to bundle and a new mental model for a
+single polling use case. `useEffect + setInterval` is 25 lines and zero dependencies.
+
+**No new library needed.**
+
+---
+
+## Auth State Architecture
+
+**Recommendation: Separate `AuthContext` from `SessionContext`.**
+
+Rationale: Auth state (`isAuthenticated`, `username`) has a different lifecycle than page state
+(files, results, filters). Auth persists as long as the cookie is valid. Page state resets per
+analysis. Mixing them into `SessionContext` would create coupling — a "reset session" action would
+incorrectly clear auth state.
+
+```ts
+// New AuthContext (~30 lines)
+interface AuthState {
+  isAuthenticated: boolean;
+  username: string | null;
+  isLoading: boolean;            // true during initial auth probe
+  login: (username: string, password: string) => Promise<void>;
+  logout: () => Promise<void>;
+}
+```
+
+`AuthProvider` wraps the app at the root, outside `SessionProvider`. On mount it calls `checkAuth()`
+which probes `GET /strategies` — if 401, `isAuthenticated = false`; otherwise `true`.
+
+---
+
+## Summary: New Dependencies
+
+**Zero.** No new packages. No `package.json` changes.
+
+| Change | Type | Size |
+|---|---|---|
+| `AuthContext.tsx` | New file (~30 lines) | n/a |
+| `AuthGuard.tsx` | New file (~15 lines) | n/a |
+| `LoginPage.tsx` | New file (~60 lines) | n/a |
+| `api.ts` — add `login()`, `logout()` functions | Edit existing | +20 lines |
+| `api.ts` — replace `authHeaders` with `credentials: "include"` | Edit existing | -3/+1 per call |
+| `routes.ts` — add `/login` + `AuthGuard` wrapper | Edit existing | +5 lines |
+| `OverUnderPage.tsx` — add precompute + polling | Edit existing | +~60 lines |
+
+---
+
+## What NOT to Add
+
+| Library | Reason Not Needed |
+|---|---|
+| `@tanstack/react-query` | Overkill for 2 endpoints + one polling screen. native fetch + useEffect covers it. |
+| `axios` | fetch() already works; axios interceptors add complexity not worth the bundle. |
+| `js-cookie` | HttpOnly cookies are not readable from JS by design — this library can't access them. |
+| `jwt-decode` | Client doesn't need to read JWT payload. Auth state comes from API responses and 401 probes. |
+| `zustand` / `jotai` | SessionContext already handles page state. AuthContext adds 30 lines of standard React Context. |
+| `swr` | Polling library for one use case is not justified. |
+| `react-use` | useInterval hook is 8 lines — no reason to import a full utility library. |
 
 ---
 
 ## Sources
 
-- ARQ PyPI (0.27.0, Feb 2026): https://pypi.org/project/arq/
-- ARQ maintenance-only discussion: https://github.com/python-arq/arq/issues/437
-- SAQ PyPI (0.26.3, Mar 2026): https://pypi.org/project/saq/
-- SAQ docs: https://saq-py.readthedocs.io/en/latest/
-- SAQ GitHub (tobymao/saq): https://github.com/tobymao/saq
-- SAQ vs ARQ comparison: https://davidmuraya.com/blog/fastapi-background-tasks-arq-vs-built-in/
-- PyJWT PyPI (2.12.1, Mar 2026): https://pypi.org/project/PyJWT/
-- FastAPI JWT migration to PyJWT: https://github.com/fastapi/fastapi/pull/11589
-- python-jose abandonment discussion: https://github.com/fastapi/fastapi/discussions/11345
-- pwdlib PyPI (0.3.0, Oct 2025): https://pypi.org/project/pwdlib/
-- pwdlib introduction: https://www.francoisvoron.com/blog/introducing-pwdlib-a-modern-password-hash-helper-for-python
-- passlib/pwdlib FastAPI discussion: https://github.com/fastapi/fastapi/discussions/11773
-- starsessions PyPI (2.2.1, Oct 2024): https://pypi.org/project/starsessions/
-- FastAPI official security docs: https://fastapi.tiangolo.com/tutorial/security/oauth2-jwt/
-- ARQ docs: https://arq-docs.helpmanual.io/
+- Codebase direct analysis (HIGH confidence): `esoccerdashboard/src/app/services/api.ts`,
+  `routes.ts`, `SessionContext.tsx`, `package.json`
+- Backend API contracts (HIGH confidence): `routers/auth.py`, `routers/precompute.py`,
+  `middleware/auth.py` — read directly from codebase
+- React Router v7 nested routes and Navigate: https://reactrouter.com/start/library/routing
+  (HIGH confidence — library already in use at pinned version 7.13.0)
+- MDN fetch credentials mode: https://developer.mozilla.org/en-US/docs/Web/API/fetch#credentials
+  (HIGH confidence — browser standard)
+- react-hook-form v7 useForm: https://react-hook-form.com/docs/useform
+  (HIGH confidence — library already in use in the project)

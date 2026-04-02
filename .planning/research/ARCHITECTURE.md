@@ -1,349 +1,327 @@
 # Architecture Patterns
 
-**Domain:** eSoccer dashboard backend — async pre-computation milestone
+**Domain:** Frontend JWT auth integration, route protection, and pre-compute polling
+**Project:** Dashboard TG — Frontend Integration v2
 **Researched:** 2026-04-02
-**Mode:** Architecture dimension for existing brownfield FastAPI + Redis project
 
 ---
 
 ## Current Architecture (Baseline)
 
-The existing system is a synchronous, request-scoped pipeline inside a single FastAPI process.
-
 ```
-Client
-  │
-  ▼
-[HTTP Layer]  routers/analysis.py
-  │  verify_api_key (X-API-Key header)
-  │
-  ▼
-[Cache Check]  Redis: analysis:{cache_key}
-  │  HIT  ──────────────────────────────► Response (immediate)
-  │  MISS
-  │
-  ▼
-[Pipeline — runs synchronously inside request handler]
-  load → normalize → deduplicate → metrics → filter → serialize
-  │
-  ▼
-[Cache Write]  Redis: analysis:{cache_key}, export:{cache_key}, blueprint:{cache_key}
-  │
-  ▼
-Response
+App.tsx
+  ThemeProvider
+    SessionProvider          <- in-memory state only, no auth
+      RouterProvider
+        Layout (/)           <- Sidebar + Header + Outlet
+          HomePage (index)
+          DalePage (/dale)
+          OverUnderPage (/over-under)
+          BlueprintPage (/blueprint/:cacheKey)
 ```
 
-**Critical problem for this milestone:** With N files, the Over/HT strategy requires 2^N - 1 combination runs. For N=3 files at ~150k rows each, this is 7 pipeline executions totalling minutes of CPU work — all synchronous inside the request handler, blocking the entire uvicorn event loop.
+All routes are unprotected. `api.ts` sends `X-API-Key` header from `VITE_API_KEY` env var. No cookie handling.
 
 ---
 
-## Recommended Architecture (Target)
-
-### Overview
-
-Introduce a **job layer** that sits between the HTTP layer and the pipeline. The upload endpoint triggers background computation and returns a job ID immediately. The frontend polls a status endpoint until all combinations are ready.
+## Target Architecture
 
 ```
-Client
-  │
-  ├── POST /precompute  (upload N files)
-  │       │
-  │       ▼
-  │   [HTTP Layer]  validate files, generate job_id
-  │       │
-  │       ▼
-  │   [Job Registry]  Redis: job:{job_id}  ← write status=pending, combinations list
-  │       │
-  │       ▼
-  │   [Background Dispatcher]  asyncio.create_task → ThreadPoolExecutor
-  │       │  (one task per combination, runs pipeline in thread)
-  │       │
-  │       ▼
-  │   [Pipeline — per combination, in thread]
-  │       load (uses filedf: cache) → normalize → dedup → metrics → serialize
-  │       │
-  │       ▼
-  │   [Cache Write per combination]  Redis: analysis:{combo_cache_key}
-  │       │
-  │       ▼
-  │   [Job Registry Update]  mark combination done, update progress
-  │
-  ├── GET /jobs/{job_id}/status  (poll)
-  │       │
-  │       ▼
-  │   [Job Registry Read]  Redis: job:{job_id}
-  │       │
-  │       ▼
-  │   Response: { status, progress, combinations: [{cache_key, files, done}] }
-  │
-  └── POST /analyze (existing — unchanged, still serves single-combination on-demand)
+App.tsx
+  ThemeProvider
+    AuthProvider             <- NEW: wraps everything, owns isAuthenticated + login/logout
+      SessionProvider        <- unchanged
+        RouterProvider
+          LoginPage (/login) <- NEW: outside Layout, no sidebar
+          ProtectedRoute     <- NEW: wraps Layout, redirects to /login on 401
+            Layout
+              HomePage (index)
+              DalePage (/dale)
+              OverUnderPage (/over-under)   <- gains pre-compute polling
+              BlueprintPage (/blueprint/:cacheKey)
 ```
 
 ---
 
 ## Component Boundaries
 
-### Existing Components (unchanged)
+### New Components
 
-| Component | Responsibility | Communicates With |
-|-----------|---------------|-------------------|
-| `routers/analysis.py` | HTTP handling, pipeline orchestration for `/analyze` | service layer, Redis, middleware |
-| `esoccer_dashboard/services/loader.py` | Read `.xlsx`, cache individual file DataFrames | Redis (`filedf:` prefix) |
-| `esoccer_dashboard/services/normalizer.py` | Add `DuplaNormalizada` column | none (pure transform) |
-| `esoccer_dashboard/services/deduplicator.py` | Cluster dedup within 5-min window | none (pure transform) |
-| `esoccer_dashboard/services/metrics.py` | Compute 16 metrics per group | none (pure transform) |
-| `esoccer_dashboard/services/cache.py` | Redis get/set with TTL | Redis |
-| `config/strategies.py` | Single source of truth for strategy params | all pipeline components |
-| `middleware/auth.py` | API Key validation dependency | all endpoints |
-
-### New Components (to build)
-
-| Component | Responsibility | Communicates With |
-|-----------|---------------|-------------------|
-| `routers/precompute.py` | `POST /precompute`, `GET /jobs/{id}/status` endpoints | job_registry, dispatcher |
-| `services/job_registry.py` | Read/write job state in Redis (`job:` prefix) | Redis |
-| `services/dispatcher.py` | Generate combinations (itertools.combinations), submit tasks to thread pool | ThreadPoolExecutor, pipeline services, job_registry |
-| `middleware/auth.py` (modified) | Replace X-API-Key with JWT Bearer token validation | `config/settings.py` for secret |
-| `routers/auth.py` | `POST /token` login endpoint | settings (credentials), PyJWT |
+| Component | File | Responsibility | Communicates With |
+|-----------|------|---------------|-------------------|
+| `AuthContext` | `components/AuthContext.tsx` | `isAuthenticated` bool, `isLoading` bool, `login()`, `logout()` async functions | `api.ts` (POST /auth/login, /auth/logout) |
+| `LoginPage` | `components/LoginPage.tsx` | Username + password form, calls `login()`, redirects on success | `AuthContext` |
+| `ProtectedRoute` | `components/ProtectedRoute.tsx` | Reads `isAuthenticated`/`isLoading`; renders `<Outlet />` or `<Navigate to="/login" />` | `AuthContext` |
+| `PrecomputeStatus` | `components/PrecomputeStatus.tsx` | Displays job progress, polls `pollJob()` until all done or failed | `api.ts` (GET /jobs/:id) |
 
 ### Modified Components
 
 | Component | Change | Why |
 |-----------|--------|-----|
-| `middleware/auth.py` | Replace `API_KEYS` env check with JWT `Bearer` token decode | New auth requirement |
-| `config/settings.py` | Add `USERNAME`, `HASHED_PASSWORD`, `JWT_SECRET`, `JWT_EXPIRE_MINUTES` | New auth config |
-| `main.py` | Mount new routers (`precompute`, `auth`); initialize thread pool executor | New endpoints |
-| `routers/analysis.py` | Remove `min_jogos` and `min_green_pct` filter step | Filters move to frontend |
+| `api.ts` | Remove `VITE_API_KEY` + `authHeaders`; add `credentials: "include"` to all `fetch()` calls; add `login()`, `logout()`, `precompute()`, `pollJob()` functions; add 401 dispatch via DOM event | Cookie-based auth replaces header auth |
+| `routes.ts` | Add `/login` route (no Layout wrapper); wrap existing children under `ProtectedRoute` | Route protection |
+| `App.tsx` | Wrap tree with `<AuthProvider>` above `<SessionProvider>` | Auth context must be available to protected routes |
+| `OverUnderPage.tsx` | Add pre-compute call on file upload; render `PrecomputeStatus` while jobs run | Pre-compute integration |
+| `Layout.tsx` | Add logout button in header | User can sign out |
+
+### Unchanged Components
+
+`DalePage`, `BlueprintPage`, `Sidebar`, `FilterBar`, `ResultsTable`, `PlayerComparisonCard`, `SessionContext`, `ThemeContext`, and all filter/modal components require no changes. The session state shape in `SessionContext.tsx` is also unchanged.
 
 ---
 
-## Data Flow: Async Pre-Computation
+## Data Flow Changes
 
-### Step-by-step
+### Auth Flow
 
 ```
-1. Client POSTs N xlsx files to /precompute
-   Headers: Authorization: Bearer {jwt_token}
-   Body: multipart/form-data, files=[A.xlsx, B.xlsx, C.xlsx], strategy="Over/HT — Dupla + Linha"
+LoginPage
+  -> calls AuthContext.login(username, password)
+  -> api.ts POST /auth/login  {username, password}
+  -> backend sets HttpOnly cookie "access_token"
+  -> on success: AuthContext sets isAuthenticated = true
+  -> ProtectedRoute now renders <Outlet />
+  -> LoginPage redirects to "/"
 
-2. Router validates JWT, validates strategy, reads all file bytes into memory
-
-3. Router generates:
-   - job_id = uuid4()
-   - For N=3 files: 7 combinations = [(A,), (B,), (C,), (A,B), (A,C), (B,C), (A,B,C)]
-   - For each combination: combo_cache_key = MD5(sorted file bytes + strategy)
-
-4. Router writes to Redis:
-   job:{job_id} = {
-     status: "running",
-     strategy: "Over/HT — Dupla + Linha",
-     total: 7,
-     completed: 0,
-     combinations: [
-       {files: ["A.xlsx"], cache_key: "abc123", done: false},
-       ...
-     ],
-     created_at: "ISO timestamp",
-     ttl: 24h
-   }
-
-5. Router responds immediately:
-   { job_id: "uuid", total_combinations: 7, status: "running" }
-
-6. Background dispatcher (asyncio.create_task):
-   - For each combination: loop.run_in_executor(thread_pool, run_pipeline, combo_args)
-   - Combinations run concurrently up to thread pool size (recommended: min(4, cpu_count))
-   - Each thread runs the full synchronous pipeline (load → normalize → dedup → metrics)
-   - On completion: update job:{job_id} progress in Redis (HINCRBY completed)
-   - On all done: set job status = "done"
-   - On error: set combination error field, mark job status = "partial" or "failed"
-
-7. Client polls GET /jobs/{job_id}/status every 2-3 seconds
-   Response: { status, completed, total, combinations: [{cache_key, done, files}] }
-
-8. When status = "done", client uses individual cache_keys to call existing /analyze
-   (cache hit, returns instantly — pipeline already ran)
+Any protected fetch()
+  -> credentials: "include" sends "access_token" cookie automatically
+  -> on 401 response: api.ts dispatches window Event "auth:unauthorized"
+  -> AuthContext listener sets isAuthenticated = false -> ProtectedRoute redirects /login
 ```
 
-### Redis Key Space (additions)
+### Cookie Name and Format (confirmed from backend source)
 
-| Key Pattern | Data | TTL |
-|-------------|------|-----|
-| `job:{job_id}` | JSON: status, progress, combination list | 24h |
-| `analysis:{cache_key}` | JSON: analysis result (existing) | 24h |
-| `filedf:{md5}` | pickled DataFrame (existing) | 24h |
+- Cookie name: `access_token`
+- HttpOnly: true
+- SameSite: lax
+- Secure: env-driven (`SECURE_COOKIES` setting in backend)
+- The browser sends it automatically — frontend never reads the cookie value directly
+
+### 401 Interception Pattern
+
+`api.ts` is not a React component and cannot call `useNavigate`. The cleanest approach for this single-consumer app is a thin wrapper with a DOM event dispatch:
+
+```typescript
+async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
+  const res = await fetch(`${BASE_URL}${path}`, {
+    ...init,
+    credentials: "include",
+  });
+  if (res.status === 401) {
+    window.dispatchEvent(new Event("auth:unauthorized"));
+  }
+  return res;
+}
+```
+
+`AuthContext` registers `addEventListener("auth:unauthorized", ...)` on mount and cleans it up on unmount. This decouples the API module from React navigation.
+
+### Pre-compute Flow
+
+```
+OverUnderPage: user uploads files
+  -> on file change: call api.precompute(files)
+  -> backend returns { job_ids: [...], total_jobs: N }
+  -> store job_ids in OverUnderPage local state (NOT SessionContext)
+  -> render PrecomputeStatus with job_ids
+    -> polls GET /jobs/:id every 2s until all completed or failed
+    -> shows progress: X/N jobs computed
+  -> user clicks Analisar (manual, at any time)
+    -> calls /analyze with selected files
+    -> cache_hit = true for combinations already pre-computed
+```
+
+Pre-compute state is NOT stored in `SessionContext`. Job IDs are ephemeral: a new file upload starts a new set of jobs. Keeping them in local state avoids stale polling state when user navigates away and back.
 
 ---
 
-## Data Flow: JWT Authentication
+## Routes After Change
 
-### Login
-
+```typescript
+export const router = createBrowserRouter([
+  {
+    path: "/login",
+    Component: LoginPage,           // no Layout, no auth check
+  },
+  {
+    path: "/",
+    Component: ProtectedRoute,      // redirects to /login if not authenticated
+    children: [
+      {
+        Component: Layout,
+        children: [
+          { index: true, Component: HomePage },
+          { path: "dale", Component: DalePage },
+          { path: "over-under", Component: OverUnderPage },
+          { path: "blueprint/:cacheKey", Component: BlueprintPage },
+        ],
+      },
+    ],
+  },
+]);
 ```
-1. POST /token
-   Body: form-data { username, password }
 
-2. Router:
-   - Compare username against USERNAME env var
-   - Verify password against HASHED_PASSWORD (bcrypt via pwdlib)
-   - On match: create JWT (sub=username, exp=now+expire_minutes)
-   - Return { access_token, token_type: "bearer" }
-
-3. Client stores token; sends as Authorization: Bearer {token} on all subsequent requests
-```
-
-### Request validation (replaces X-API-Key)
-
-```
-Current:  verify_api_key(x_api_key: str = Header(...)) → checks API_KEYS set
-Target:   verify_token(credentials = Depends(HTTPBearer())) → PyJWT.decode() → raises 401 if invalid/expired
-```
-
-No token revocation list needed for single-user scenario. Token expiry + re-login is sufficient.
+`ProtectedRoute` is a layout route (no `path` of its own) that wraps `Layout` so both receive the same `<Outlet />` chain.
 
 ---
 
-## Background Processing: Technology Decision
+## AuthContext Design
 
-**Decision: asyncio.create_task + ThreadPoolExecutor (no ARQ, no Celery)**
+```typescript
+interface AuthContextValue {
+  isAuthenticated: boolean;
+  isLoading: boolean;          // true during initial session probe on mount
+  login: (username: string, password: string) => Promise<void>;
+  logout: () => Promise<void>;
+}
+```
 
-Rationale:
+On mount, `AuthProvider` calls `GET /strategies` with `credentials: "include"`. If the response is 200, the cookie is valid and `isAuthenticated = true`. If 401, `isAuthenticated = false`. This avoids storing any token in `localStorage`.
 
-| Option | Fit | Why |
-|--------|-----|-----|
-| FastAPI `BackgroundTasks` | Poor | No status tracking, CPU work blocks event loop, lost on restart |
-| `asyncio.create_task + run_in_executor(ThreadPoolExecutor)` | Good | Status in Redis survives, no new infrastructure, works with synchronous pandas, controlled concurrency |
-| ARQ worker | Overkill | Requires separate Docker service, supervisord for same-container deployment, adds operational complexity for a single-user VPS app |
-| Celery | Overkill | Designed for distributed multi-process; adds broker config, worker management, not worth it here |
+The `/strategies` endpoint is already used by both analysis pages on load. It is a safe probe with no side effects. Use it as the session check until backend exposes a dedicated `/auth/me`.
 
-**Why ThreadPoolExecutor and not ProcessPoolExecutor:**
+`isLoading = true` during this probe. `ProtectedRoute` renders a blank (or minimal spinner) while `isLoading` is true to prevent a flash of redirect to `/login` on page refresh.
 
-The pipeline's bottleneck is pandas I/O and computation, not Python GIL-bound pure CPU. Each thread calls `run_pipeline()` which is synchronous and pandas-heavy — threads release the GIL during numpy/pandas operations. ThreadPoolExecutor avoids the serialization overhead of ProcessPoolExecutor (pickling large DataFrames across process boundaries is expensive). The `filedf:` cache in Redis already handles cross-combination file reuse, so threads share nothing except the Redis client.
+---
 
-**Concurrency budget:** `max_workers = min(4, os.cpu_count())`. At 7 combinations for 3 files, 4 concurrent pipeline threads is appropriate for a VPS with 2-4 cores.
+## api.ts Migration
+
+### What Changes
+
+```typescript
+// REMOVE
+const API_KEY = import.meta.env.VITE_API_KEY as string;
+const authHeaders = { "X-API-Key": API_KEY };
+```
+
+```typescript
+// ADD — central fetch wrapper with cookie + 401 dispatch
+async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
+  const res = await fetch(`${BASE_URL}${path}`, {
+    ...init,
+    credentials: "include",
+  });
+  if (res.status === 401) {
+    window.dispatchEvent(new Event("auth:unauthorized"));
+  }
+  return res;
+}
+
+export async function login(username: string, password: string): Promise<void> {
+  const res = await fetch(`${BASE_URL}/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({ username, password }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err?.detail ?? "Credenciais invalidas");
+  }
+}
+
+export async function logout(): Promise<void> {
+  await fetch(`${BASE_URL}/auth/logout`, {
+    method: "POST",
+    credentials: "include",
+  });
+}
+
+export async function precompute(files: File[]): Promise<string[]> {
+  const form = new FormData();
+  files.forEach((f) => form.append("files", f));
+  const res = await apiFetch("/precompute", { method: "POST", body: form });
+  if (!res.ok) throw new Error("Erro ao iniciar pre-computacao");
+  const data = await res.json();
+  return data.job_ids as string[];
+}
+
+export async function pollJob(
+  jobId: string
+): Promise<{ status: string; cache_key?: string; error?: string }> {
+  const res = await apiFetch(`/jobs/${jobId}`);
+  if (!res.ok) throw new Error(`Job ${jobId} nao encontrado`);
+  return res.json();
+}
+```
+
+All existing functions (`fetchStrategies`, `analyzeFiles`, `exportResults`, `fetchBlueprint`) swap `{ headers: authHeaders }` for calls to `apiFetch(...)`. The pure utilities (`detectBet`, `exportFilteredResults`, `normalizeResult`, `extractHorariosFromFiles`) are untouched — they have no HTTP calls.
+
+---
+
+## Build Order (Dependency-First)
+
+| Step | Work | Dependencies |
+|------|------|-------------|
+| 1 | Migrate `api.ts` — remove API key, add `apiFetch`, add `login`/`logout`/`precompute`/`pollJob` | None |
+| 2 | Build `AuthContext.tsx` — state, session probe on mount, `auth:unauthorized` listener | `api.ts` step 1 |
+| 3 | Build `LoginPage.tsx` — form UI, calls `AuthContext.login()`, redirects on success | `AuthContext` step 2 |
+| 4 | Build `ProtectedRoute.tsx` — reads `isAuthenticated`/`isLoading`, redirects or renders `<Outlet />` | `AuthContext` step 2 |
+| 5 | Update `routes.ts` — add `/login`, wrap children with `ProtectedRoute` | Steps 3 + 4 |
+| 6 | Update `App.tsx` — add `<AuthProvider>` above `<SessionProvider>` | Step 2 |
+| 7 | Add logout button to `Layout.tsx` — calls `AuthContext.logout()` | Step 2 |
+| 8 | Build `PrecomputeStatus.tsx` — polling interval, progress display, cleanup on unmount | `api.ts` step 1 |
+| 9 | Update `OverUnderPage.tsx` — call `precompute()` on file change, render `PrecomputeStatus` | Steps 1 + 8 |
+
+Steps 1-7 are the auth chain and must run serially. Step 8 can begin after step 1. Step 9 requires steps 1 and 8 to be done.
+
+---
+
+## Patterns to Follow
+
+### Session Probe (not localStorage)
+
+The backend uses HttpOnly cookies — the frontend cannot read the token value. On page refresh, the only way to know if the session is valid is to call a protected endpoint and observe the response code. Use `GET /strategies` as the probe (no side effects, needed anyway). Store `isAuthenticated` in React state only, not `localStorage`.
+
+### Event-Based 401 Interception
+
+`api.ts` is a plain module with no React context. Use a custom DOM event (`auth:unauthorized`) dispatched from `apiFetch` when a 401 is received. `AuthContext` listens for this event and sets `isAuthenticated = false`, which causes `ProtectedRoute` to redirect to `/login`. This avoids importing React hooks or navigation into the API module.
+
+### Pre-compute as Fire-and-Forget with Visible Progress
+
+`POST /precompute` returns immediately with `job_ids`. `OverUnderPage` stores these IDs in local state (`useState`, not `SessionContext`). `PrecomputeStatus` polls every 2 seconds using `setInterval` cleared in a `useEffect` cleanup. Polling stops when all jobs reach `completed` or `failed`. The user can trigger `handleAnalyze` manually at any time regardless of polling state — if the job is done, `/analyze` returns a cache hit instantly.
 
 ---
 
 ## Anti-Patterns to Avoid
 
-### Anti-Pattern 1: Running pandas pipeline as an async coroutine directly
+### Storing JWT in localStorage
 
-**What:** `async def run_combination(...)` calling pandas operations directly in the coroutine.
-**Why bad:** pandas operations are synchronous and CPU/IO-bound. Calling them from an async function without `run_in_executor` blocks the entire event loop, making all API endpoints unresponsive during computation.
-**Instead:** Wrap in `await loop.run_in_executor(executor, sync_pipeline_fn, args)`.
+The backend sets an HttpOnly cookie. Frontend must never extract or store the token value. `credentials: "include"` on every `fetch()` is sufficient — the browser handles cookie transmission automatically. Mirroring the token in `localStorage` creates a security downgrade and is unnecessary.
 
-### Anti-Pattern 2: Storing job status in process memory (dict)
+### Passing navigate() into api.ts
 
-**What:** `jobs_in_memory: dict[str, JobStatus]` as a module-level variable in the router.
-**Why bad:** Lost on container restart. Breaks if two uvicorn workers are ever spawned. The job_id returned to the client becomes permanently unresolvable.
-**Instead:** All job state in Redis with TTL.
+`api.ts` is a plain module, not a React component. Importing `useNavigate` or passing a `navigate` reference into it creates lifecycle coupling. Use the DOM event pattern to decouple 401 handling from the API layer.
 
-### Anti-Pattern 3: Blocking the upload endpoint waiting for combinations to finish
+### Storing Pre-compute Job IDs in SessionContext
 
-**What:** `await asyncio.gather(*combination_tasks)` inside the `POST /precompute` handler.
-**Why bad:** Client waits for all combinations (potentially minutes) before getting a response. Defeats the purpose of async pre-computation.
-**Instead:** `asyncio.create_task(dispatch_combinations(...))` then `return {job_id, status: "running"}` immediately.
+Job IDs expire in Redis on the backend and become meaningless after a new file upload triggers new jobs. Keeping them in `SessionContext` would show stale polling state when the user navigates away and back. Keep them in `OverUnderPage` local state with a reset on file change.
 
-### Anti-Pattern 4: Generating N×M combinations including strategy variants at once
+### Polling Without useEffect Cleanup
 
-**What:** Pre-computing all file combinations for all strategies in one job.
-**Why bad:** Exponential explosion. Requirements explicitly scope pre-computation to Over/HT only.
-**Instead:** Strategy is a parameter of `/precompute`. One endpoint call = one strategy.
-
-### Anti-Pattern 5: Keeping python-jose for JWT
-
-**What:** Using `python-jose` as JWT library (was previously recommended in older FastAPI docs).
-**Why bad:** Last release in 2021, known CVEs, effectively abandoned. FastAPI docs have migrated away.
-**Instead:** Use `PyJWT` (actively maintained, minimal dependencies) with `pwdlib[bcrypt]` for password hashing.
+Pre-compute polling must clear its `setInterval` when the component unmounts or when the file set changes (which resets jobs). Failing to do so causes `setOverUnder` calls on an unmounted component and stale closures reading old job IDs.
 
 ---
 
 ## Scalability Considerations
 
-| Concern | Current (single-user VPS) | If load increases |
-|---------|--------------------------|-------------------|
-| Concurrent job submissions | 1 at a time, single user | Add job queue depth limit in job_registry |
-| Thread pool exhaustion | 7 combinations, 4 threads — fine | Tune max_workers or add ARQ then |
-| Redis memory | Job metadata is tiny JSON, TTL 24h | No issue for this scale |
-| File upload size | N xlsx files in memory per request | Add file size validation |
-| Token expiry | Set to 8-24h for single user (convenience) | Shorter expiry + refresh tokens for multi-user |
-
----
-
-## Build Order (Phase Dependencies)
-
-The three features have clean dependency ordering:
-
-```
-Phase 1: Remove backend filters (min_jogos, min_green_pct)
-  │  Prerequisite for: nothing — independent, simplest change
-  │  Risk: none (additive removal)
-  │
-  ▼
-Phase 2: JWT authentication (replace X-API-Key)
-  │  Prerequisite for: pre-computation (new endpoints need auth)
-  │  Dependencies: PyJWT, pwdlib — new packages
-  │  Risk: low — well-understood pattern, single user
-  │
-  ▼
-Phase 3: Async pre-computation
-     Prerequisite: phases 1 and 2 complete
-     Dependencies: job_registry, dispatcher, ThreadPoolExecutor, new router
-     Risk: medium — concurrency, Redis data structures, polling contract
-```
-
-**Why this order:**
-
-Phase 1 is a clean subtraction (remove filter lines from `_analyze_with_strategy`). No new code, no risk. Gets it out of the way.
-
-Phase 2 changes the auth contract for all endpoints. It must be stable before Phase 3 adds new protected endpoints. New packages (`PyJWT`, `pwdlib`) are isolated to new middleware and one new router.
-
-Phase 3 builds on the stable auth surface. The `filedf:` cache (already built) is the critical optimization that makes concurrent combinations fast — files are loaded once per job, not once per combination. This dependency is already satisfied by the current codebase.
-
----
-
-## Component Communication Summary
-
-```
-[auth.py router]
-    │ POST /token
-    ▼
-[middleware/auth.py]  ←── used by all authenticated endpoints
-    │
-    ├── [routers/precompute.py]
-    │       │
-    │       ├── [services/job_registry.py]  ──► Redis job:{job_id}
-    │       │
-    │       └── [services/dispatcher.py]
-    │               │
-    │               ├── itertools.combinations (stdlib)
-    │               │
-    │               └── ThreadPoolExecutor
-    │                       │
-    │                       ▼ (one thread per combination)
-    │                   [existing pipeline]
-    │                   loader → normalizer → deduplicator → metrics
-    │                       │
-    │                       ▼
-    │                   Redis filedf:{md5}, analysis:{key}, export:{key}, blueprint:{key}
-    │                       │
-    │                       ▼
-    │                   job_registry.update_progress()  ──► Redis job:{job_id}
-    │
-    └── [routers/analysis.py]  (existing, unchanged for /analyze)
-```
+| Concern | Current State | After Change |
+|---------|--------------|--------------|
+| Auth | API key in env var, no expiry | JWT cookie with `JWT_EXPIRE_MINUTES` expiry; user sees login form again after expiry |
+| Pre-compute scale | N/A | 2^N-1 jobs for N files; 5 files = 31 jobs. Polling 31 job IDs every 2s is fine for single-user |
+| Session state on refresh | In-memory only, lost on refresh | Auth probe restores `isAuthenticated`; page state (files, results) still lost on refresh — acceptable per current architecture |
 
 ---
 
 ## Sources
 
-- [FastAPI BackgroundTasks official docs](https://fastapi.tiangolo.com/tutorial/background-tasks/) — HIGH confidence
-- [FastAPI OAuth2 + JWT official tutorial](https://fastapi.tiangolo.com/tutorial/security/oauth2-jwt/) — HIGH confidence (PyJWT + pwdlib[argon2] now recommended over python-jose + passlib)
-- [Managing Background Tasks: BackgroundTasks vs ARQ](https://davidmuraya.com/blog/fastapi-background-tasks-arq-vs-built-in/) — MEDIUM confidence (external blog, consistent with official docs)
-- [python-jose abandonment discussion](https://github.com/fastapi/fastapi/discussions/11345) — HIGH confidence (FastAPI maintainer discussion confirming migration to PyJWT)
-- [FastAPI run_in_executor vs run_in_threadpool](https://sentry.io/answers/fastapi-difference-between-run-in-executor-and-run-in-threadpool/) — MEDIUM confidence
-- [Leapcell: Managing Long-Running Operations in FastAPI](https://leapcell.io/blog/managing-background-tasks-and-long-running-operations-in-fastapi) — MEDIUM confidence
-
----
-
-*Architecture research: 2026-04-02*
+- `esoccerdashboard/src/app/services/api.ts` — confirmed `X-API-Key` header pattern, all endpoint call sites
+- `esoccerdashboard/src/app/components/SessionContext.tsx` — confirmed no auth state, PageState shape
+- `esoccerdashboard/src/app/routes.ts` — confirmed all routes under single Layout, no protection
+- `esoccerdashboard/src/app/App.tsx` — confirmed provider tree order (ThemeProvider > SessionProvider > RouterProvider)
+- `esoccerdashboard/src/app/components/Layout.tsx` — confirmed header is the correct location for logout button
+- `esoccerdashboard/src/app/components/OverUnderPage.tsx` — confirmed file change + analyze flow, local state usage pattern
+- `routers/auth.py` — confirmed cookie name `access_token`, httponly, samesite=lax, POST /auth/login returns `{ access_token, token_type }`
+- `routers/precompute.py` — confirmed POST /precompute returns `{ job_ids, total_jobs }`, GET /jobs/:id returns `{ status, cache_key?, error? }`
+- `middleware/auth.py` — confirmed dual-mode JWT (cookie OR Bearer header), 401 detail "Nao autenticado"
+- Confidence: HIGH — all conclusions drawn from reading actual source files, no training-data assumptions

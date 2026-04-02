@@ -1,17 +1,17 @@
 # Project Research Summary
 
-**Project:** dash-tg — Melhorias v2 (async pre-computation, auth migration, filter removal)
-**Domain:** Brownfield FastAPI + Redis + pandas analytics API — single-user, single-VPS
+**Project:** Dashboard TG — Frontend Integration v2 (JWT auth UI, route guards, pre-compute polling)
+**Domain:** React SPA — JWT HttpOnly cookie auth migration + route protection + background job polling
 **Researched:** 2026-04-02
 **Confidence:** HIGH
 
 ## Executive Summary
 
-This is a targeted, three-feature improvement milestone on an existing production FastAPI + Redis + pandas backend. The project is not a greenfield build — the pipeline, caching strategy, and deployment model are already proven. The three features are: (1) remove backend display filters so the frontend controls row visibility, (2) replace X-API-Key header auth with single-user login/password JWT auth, and (3) implement async pre-computation of all 2^N-1 spreadsheet combinations for the Over/HT strategy. Each feature is self-contained with clean dependency ordering: filter removal has no dependencies, auth migration depends only on itself, and pre-computation depends on both preceding phases being stable.
+This milestone integrates the React frontend with a backend that has already been upgraded to JWT cookie auth (Phase 02-02). The task is purely frontend: replace the `X-API-Key` header pattern with HttpOnly cookie auth, add a login page and route guards, and wire up the pre-compute polling flow in Over/Under. The backend contracts (`POST /auth/login`, `POST /auth/logout`, `POST /precompute`, `GET /jobs/{job_id}`) are stable and already deployed. No new frontend libraries are required — every capability needed is already present in the dependency tree (React 18, react-router 7, react-hook-form, shadcn/ui, sonner, @radix-ui/react-progress).
 
-The recommended approach leans on the existing infrastructure: no new databases, no Celery, no RabbitMQ. Pre-computation runs as a `ThreadPoolExecutor`-backed background dispatcher inside the existing FastAPI process, with all job state stored in Redis under a `job:{job_id}` key. Auth uses PyJWT + pwdlib (both actively maintained, both officially recommended in current FastAPI docs) issuing a JWT served as an HttpOnly cookie. The filter removal is a single code deletion in `routers/analysis.py` — the lowest-risk change of the three.
+The recommended approach is a two-phase execution: first deliver the full auth chain (AuthContext + LoginPage + ProtectedRoute + api.ts migration + logout), then layer in the pre-compute polling. Auth must come first because without it no other feature can be tested against the new backend. The auth implementation centers on three concrete patterns: an `AuthContext` (~30 lines) that probes `GET /strategies` on mount to verify cookie validity, a `ProtectedRoute` component that renders null while the probe is in flight (to prevent flash redirects), and a DOM event (`auth:unauthorized`) dispatched from a central `apiFetch` wrapper to decouple 401 handling from React navigation.
 
-The critical risks are: (a) running pandas pipeline work on the async event loop without offloading to a thread pool — this will starve the API under any concurrent load; (b) deploying filter removal without coordinating cache invalidation and frontend readiness — stale filtered results will be served from Redis to an unfiltered-aware frontend; (c) storing the JWT in `localStorage` instead of an HttpOnly cookie — any XSS vector in the frontend yields full account compromise. All three risks are well-understood and preventable with known patterns documented in PITFALLS.md.
+The main risks are dev environment breakage (SameSite=Lax cross-port cookie issues between Vite port 5173 and API port 8000) and incomplete migration (leaving residual `X-API-Key` headers that mask cookie failures in dev). Both are preventable: add a Vite dev proxy as the first action before writing any auth code, and replace all `authHeaders` references in a single atomic commit that also removes `VITE_API_KEY` from `.env`.
 
 ---
 
@@ -19,142 +19,117 @@ The critical risks are: (a) running pandas pipeline work on the async event loop
 
 ### Recommended Stack
 
-The existing stack (FastAPI, pandas, openpyxl, redis-py, uvicorn) is unchanged. Only two new packages are added. For pre-computation, SAQ (0.26.3) is the recommended async task queue — it is ARQ's active successor, uses Redis as its sole broker (no new infra), and has built-in job status tracking. However, ARCHITECTURE.md makes a strong case for skipping SAQ entirely in favor of `asyncio.create_task + ThreadPoolExecutor`, which keeps the worker in-process and avoids a second Docker service. This is the right call for a single-user VPS deployment. For auth, PyJWT (2.12.1) and pwdlib (0.3.0) are the current FastAPI-recommended libraries — python-jose is abandoned (2021, 8 CVEs) and passlib breaks on Python 3.13+.
+Zero new libraries are required. The existing stack handles every capability: react-hook-form covers the login form, `fetch()` with `credentials: "include"` handles cookie transmission, react-router `<Navigate>` and nested route wrappers handle route protection, `useState`/`useEffect`/`setInterval` handle polling, and `@radix-ui/react-progress` provides the progress bar component already installed.
+
+The only infrastructure change needed is a Vite dev proxy to align the browser origin for dev requests, eliminating SameSite cookie cross-port issues without touching CORS or backend config.
 
 **Core technologies:**
-- `PyJWT>=2.12.1`: JWT sign/verify — FastAPI's officially documented replacement for abandoned python-jose
-- `pwdlib[argon2]>=0.3.0`: Password hashing — FastAPI's officially documented replacement for unmaintained passlib
-- `asyncio.create_task + ThreadPoolExecutor` (stdlib): Background combination dispatch — no new dependency, no extra Docker service; threads release GIL during pandas I/O
-- `redis.asyncio` (already in redis-py 4+): Async Redis client — necessary to prevent sync Redis calls from blocking the event loop during 7x amplified background writes
+- `react-router 7.13.0`: Nested layout routes for ProtectedRoute wrapper — already in use at pinned version
+- `react-hook-form 7.55.0`: Login form state and validation — already in use in the project
+- `native fetch()` with `credentials: "include"`: Cookie transmission on all API calls — replaces X-API-Key header pattern
+- `React Context (18.3.1)`: New AuthContext (~30 lines) separate from SessionContext — no new library
+- `@radix-ui/react-progress 1.1.2`: Pre-compute job progress bar — already installed
 
 ### Expected Features
 
 **Must have (table stakes):**
-- `POST /auth/login` and `POST /auth/logout` — required to replace the X-API-Key flow; no login endpoint means no token
-- Token validation dependency on all protected endpoints — replaces `verify_api_key`; without this, auth migration is incomplete
-- Non-blocking upload response returning `job_id` immediately — blocking until all combinations complete causes timeout failures
-- `GET /jobs/{job_id}/status` polling endpoint — without status, the frontend has no signal that pre-computation is done
-- All combinations auto-enqueued on upload — the stated value proposition is "user uploads files and finds results already computed"
-- Backend filters removed (`min_jogos`, `min_green_pct` deleted from pipeline) — frontend cannot filter data it never received
-- Password stored as argon2/bcrypt hash in env — storing plaintext is a meaningful security gap even for single-user
+- Login page (`/login`) — backend now requires JWT; without it the app is permanently locked
+- `credentials: "include"` on all API calls — without this flag the HttpOnly cookie is never sent; every call returns 401
+- Redirect to `/login` on 401 — backend returns 401 instead of API key rejection; raw 401 without a catch causes blank errors
+- Route guard protecting all existing routes — unauthenticated users get a broken dashboard without guards
+- Logout action — user session must be terminable; `POST /auth/logout` already built on backend
+- Remove `VITE_API_KEY` env var and `X-API-Key` header — old auth mechanism conflicts with new one
 
 **Should have (differentiators):**
-- Per-combination labels in upload response (which file subsets were enqueued, with their `cache_key`) — frontend can attempt cache hits for combinations already computed in a prior session
-- Bulk job status endpoint (`GET /jobs/status?ids=...`) — reduces polling round-trips when 7 jobs are running
-- Job TTL bounded in Redis — prevents stale "in progress" state accumulating after worker crashes
-- Configurable token expiry via `JWT_EXPIRE_HOURS` env var — consistent with existing `CACHE_TTL_ANALYSIS` pattern
+- Pre-compute auto-triggered on Over/Under file upload — core value prop: cache is warm by the time user clicks Analyze
+- Job progress indicator (X of N jobs complete) — with up to 31 combinations, user needs feedback that computation is running
+- Clean polling termination — orphaned intervals cause React warnings and network spam
+- "Sessao expirada" toast on 401 mid-session — smoother UX than abrupt redirect on token expiry
 
 **Defer (v2+):**
-- Pre-computation for eSoccer — Dupla strategy — explicitly out of scope; Over/HT only
-- Multi-user / registration system — out of scope; single hardcoded user in env
-- WebSocket real-time job updates — polling every 2-3s is sufficient for 7 jobs completing in under 60s
-- Refresh token rotation — adds complexity with no benefit for a single-user system
-- Password reset flow — operator changes `.env` directly
+- Refresh token rotation — backend does not issue refresh tokens; re-login on expiry is acceptable
+- Remember-me checkbox — cookie persistence already controlled by backend `max_age`
+- WebSocket for job updates — 2s polling for up to 31 jobs is sufficient for single-user; no backend plumbing needed
+- Multi-tab auth sync — single internal user, no identified need
 
 ### Architecture Approach
 
-The architecture introduces a job layer between the HTTP layer and the existing synchronous pipeline. The `/precompute` endpoint accepts N files, immediately writes a `job:{job_id}` status key to Redis, fires `asyncio.create_task(dispatch_combinations(...))`, and returns the `job_id` with `202 Accepted`. The dispatcher uses `itertools.combinations` to generate all 2^N-1 subsets, then submits each as a `loop.run_in_executor(thread_pool, run_pipeline, combo_args)` call. Threads run the existing synchronous pipeline unchanged. On completion each thread writes to `analysis:{cache_key}` (existing prefix) and increments the job progress counter. The existing `/analyze` endpoint is untouched — it continues to serve on-demand requests and will cache-hit immediately for any pre-computed combination. New auth flows via a `routers/auth.py` router and a revised `middleware/auth.py` that validates JWT from the cookie instead of an `X-API-Key` header.
+The architecture change is a provider injection at the root and a route wrapper. `AuthProvider` is added above `SessionProvider` in `App.tsx`. `ProtectedRoute` (a layout route component, not a path route) wraps the existing `Layout` in the route tree. `LoginPage` sits outside the guard at `/login`. The `api.ts` module gets a central `apiFetch` wrapper that attaches `credentials: "include"` and dispatches an `auth:unauthorized` DOM event on 401 — decoupling auth logic from React navigation without passing hooks into a plain module. Pre-compute state (job IDs, statuses) lives in `OverUnderPage` local state, not `SessionContext`, because it is ephemeral per file upload.
 
 **Major components:**
-1. `routers/precompute.py` (new) — `POST /precompute` and `GET /jobs/{id}/status` endpoints
-2. `services/job_registry.py` (new) — read/write `job:{job_id}` state in Redis; stale-detection logic
-3. `services/dispatcher.py` (new) — combination enumeration via `itertools.combinations`; ThreadPoolExecutor submission; progress updates
-4. `routers/auth.py` (new) — `POST /token` login; sets HttpOnly cookie; returns Bearer token for API clients
-5. `middleware/auth.py` (modified) — replace `API_KEYS` env check with `PyJWT.decode()` from cookie or Bearer header
-6. `routers/analysis.py` (modified) — remove 2-line filter block (`min_jogos`, `min_green_pct`)
-7. Existing pipeline services (loader, normalizer, deduplicator, metrics) — unchanged
+1. `AuthContext.tsx` (new, ~30 lines) — `isAuthenticated`, `isLoading`, `login()`, `logout()`; probes `GET /strategies` on mount; listens for `auth:unauthorized` DOM event
+2. `ProtectedRoute.tsx` (new, ~15 lines) — renders null while `isLoading`, redirects with `replace` to `/login` when `!isAuthenticated`
+3. `LoginPage.tsx` (new, ~60 lines) — react-hook-form form, calls `AuthContext.login()`, redirects to `/` on success, redirects to `/` if already authenticated
+4. `apiFetch` wrapper in `api.ts` (edit) — central `credentials: "include"`, 401 dispatch, `login()`/`logout()`/`precompute()`/`pollJob()` functions added
+5. `PrecomputeStatus.tsx` (new, ~40 lines) — single `setInterval` polling all job IDs, progress bar via `@radix-ui/react-progress`, cleanup on unmount and job completion
 
 ### Critical Pitfalls
 
-1. **CPU-bound pandas work on the event loop** — never call the pipeline from a bare `async def` or `BackgroundTasks.add_task()` without `run_in_executor`; this blocks all concurrent requests for the duration of computation. Use `starlette.concurrency.run_in_threadpool` or `loop.run_in_executor(ThreadPoolExecutor, ...)`.
+1. **Residual X-API-Key after migration** — Replace all `authHeaders` references and remove `VITE_API_KEY` in a single atomic commit. The backend's dual-auth (API key still in env) means everything works in dev with the old key, masking the broken cookie path until production deploy. Verify in DevTools Network that requests carry `Cookie: access_token=...` not `X-API-Key`.
 
-2. **Stale filtered cache after filter removal** — the existing `analysis:` and `export:` Redis keys contain filtered results; deploying filter removal without flushing these keys means the new unfiltered-aware frontend will receive old filtered data on cache hits. Flush all `analysis:` and `export:` keys at deploy time. Coordinate frontend deploy to handle unfiltered response before backend change ships.
+2. **Auth state flash on page refresh** — `ProtectedRoute` must render `null` (not redirect) while `isLoading === true`. Only redirect when `isLoading === false && isAuthenticated === false`. Without this, every hard refresh kicks the user to `/login` even with a valid session.
 
-3. **JWT in localStorage exposes token to XSS** — issue the JWT as `HttpOnly; Secure; SameSite=Strict` cookie. Also keep a `Bearer` token in the JSON response body for API clients and Swagger. Do not store the token in `localStorage`.
+3. **SameSite=Lax cross-port cookie failure in dev** — Add Vite proxy (`/api` → `http://localhost:8000`) before writing any auth code. Without it, login sets the cookie but subsequent calls to port 8000 may not include it due to browser SameSite enforcement.
 
-4. **CORS `allow_origins=["*"]` becomes a CSRF vector after cookie auth** — `X-API-Key` headers are CSRF-safe by nature; cookies are not. Lock down `allow_origins` to the actual frontend domain before deploying cookie auth. This is a prerequisite, not a follow-up.
+4. **Polling interval leak** — Use a single `setInterval` that polls all pending job IDs per tick (not N separate intervals). Always return `clearInterval` from `useEffect`. Stop and clear when all jobs reach terminal state (`completed` or `failed`).
 
-5. **Combinatorial memory explosion on concurrent combination execution** — running all 7 combinations simultaneously for N=3 files can peak at 350-700 MB on a VPS with 1-2 GB RAM. Run combinations sequentially in the background task, with explicit `del result; gc.collect()` between iterations. Sequential execution still completes in ~30-60s background time, which is acceptable.
+5. **Logout does not clear client state** — Await `POST /auth/logout` before setting `isAuthenticated = false` and calling `navigate("/login", { replace: true })`. Also clear `SessionContext` state to prevent stale analysis data appearing to the next login session.
 
 ---
 
 ## Implications for Roadmap
 
-Based on research, the three features have a natural dependency ordering that is unanimous across STACK.md, FEATURES.md, ARCHITECTURE.md, and PITFALLS.md. Suggested phase structure:
+Based on combined research, two phases are sufficient.
 
-### Phase 1: Backend Filter Removal
+### Phase 1: Auth Chain
 
-**Rationale:** Zero dependencies, zero new packages, lowest risk. A pure code deletion. Must be deployed before the pre-computation phase, because pre-computation results stored without filters need to be consumed by a frontend that already handles unfiltered data. Getting this out of the way first de-risks everything downstream.
+**Rationale:** All auth infrastructure must be in place before any other feature can be tested against the backend. Pre-compute polling has no value without a working session. The auth chain is a linear dependency: `api.ts` migration first, then AuthContext, then LoginPage + ProtectedRoute, then routes.ts update, then App.tsx wrapping, then Layout logout button.
 
-**Delivers:** Full metrics dataset returned from `/analyze` and all pre-computed results. Frontend gains control over `min_jogos` and `min_green_pct` filtering. Unblocks frontend filter UI implementation.
+**Delivers:** Fully functional login/logout flow. All existing routes protected. Cookie-based auth replaces header auth. Old `VITE_API_KEY` removed. Users can authenticate and access the dashboard in production.
 
-**Addresses:** "Filters removed from backend response" (table stakes, FEATURES.md)
+**Addresses:** All table-stakes features — login page, `credentials: "include"`, route guard, logout, `X-API-Key` removal.
 
-**Avoids:** Pitfall 4 (stale filtered cache). Requires: flush all `analysis:` + `export:` Redis keys at deploy; coordinate with frontend readiness for unfiltered payload.
+**Avoids:** Pitfall 3 (add Vite proxy first), Pitfall 1 (atomic api.ts migration), Pitfall 2 (isLoading guard), Pitfall 6 (await logout + clear state), Pitfall 9 (ignore token in response body), Pitfall 13 (use `replace` on redirect).
 
-**Research flag:** Standard pattern — no further research needed.
+**Build order within phase (serial, each step depends on prior):**
+1. Add Vite dev proxy to `vite.config.ts`
+2. Migrate `api.ts`: remove `authHeaders`/`VITE_API_KEY`, add `apiFetch` wrapper, add `login()`/`logout()`/`precompute()`/`pollJob()`
+3. Build `AuthContext.tsx` with `isLoading`, session probe on mount, `auth:unauthorized` listener
+4. Build `LoginPage.tsx` — redirects authenticated users to `/`
+5. Build `ProtectedRoute.tsx` — `replace` on redirect, renders null while loading
+6. Update `routes.ts` — add `/login` outside guard, wrap children under `ProtectedRoute`
+7. Update `App.tsx` — add `<AuthProvider>` above `<SessionProvider>`
+8. Add logout button to `Layout.tsx`
 
----
+### Phase 2: Pre-compute Polling
 
-### Phase 2: JWT Authentication (Replace X-API-Key)
+**Rationale:** Over/Under pre-compute is the core value proposition of this milestone. Once auth is working, this phase is self-contained: trigger `POST /precompute` on file change, store job IDs in local state, poll until terminal. Does not require changes to any auth code.
 
-**Rationale:** Auth must be stable before new endpoints are added in Phase 3. Changing the auth contract on existing endpoints while simultaneously adding new ones creates a wider blast radius if the auth implementation has a bug. New packages (`PyJWT`, `pwdlib`) are isolated to one new router and one modified middleware file — easy to review and test in isolation.
+**Delivers:** Pre-compute is triggered automatically on file selection in Over/Under. Users see a progress indicator (X of N jobs). When they click Analyze, the cache is warm and results appear instantly. Failed jobs show error messages with the `error` field from the job response.
 
-**Delivers:** `POST /token` login endpoint, `POST /auth/logout`, JWT served as HttpOnly cookie, `verify_session` dependency replacing `verify_api_key` on all protected routes, Bearer token fallback for Swagger UI.
+**Addresses:** Pre-compute auto-trigger, job progress indicator, clean polling termination, failed job UI.
 
-**Uses:** PyJWT 2.12.1, pwdlib[argon2] 0.3.0 (STACK.md)
+**Avoids:** Pitfall 5 (single interval + cleanup), Pitfall 10 (snapshot files at call time, same as `ouRef` pattern), Pitfall 14 (explicitly handle `failed` status in UI).
 
-**Implements:** `routers/auth.py` (new), `middleware/auth.py` (modified), `config/settings.py` additions (ARCHITECTURE.md)
-
-**Avoids:**
-- Pitfall 5: JWT in localStorage — use HttpOnly cookie
-- Pitfall 6: CORS wildcard CSRF — lock `allow_origins` to frontend domain as part of this phase
-- Pitfall 7: Swagger breakage — keep Bearer token in JSON response alongside cookie
-- Pitfall 10: Plaintext password — store only argon2 hash in env
-- Pitfall 12: Weak JWT secret — generate with `openssl rand -hex 32`
-
-**Research flag:** Standard pattern — PyJWT + pwdlib pattern is well-documented in current FastAPI official docs. No further research needed.
-
----
-
-### Phase 3: Async Pre-computation
-
-**Rationale:** Most complex feature; depends on Phases 1 and 2 being stable. Phase 1 ensures pre-computed results have the correct (unfiltered) shape. Phase 2 ensures the new `/precompute` endpoint has stable auth from day one. The `filedf:` Redis cache (already implemented) is the critical optimization that makes concurrent combination runs fast — files are loaded once per job, not once per combination.
-
-**Delivers:** `POST /precompute` endpoint (non-blocking, returns `job_id` immediately), `GET /jobs/{job_id}/status` polling endpoint, background combination dispatcher using ThreadPoolExecutor, `job:{job_id}` Redis status tracking with stale-detection, all 2^N-1 combinations pre-computed and stored under existing `analysis:{cache_key}` prefix for immediate cache hits on subsequent `/analyze` calls.
-
-**Uses:** `asyncio.create_task + ThreadPoolExecutor` (stdlib), `redis.asyncio` migration (STACK.md + ARCHITECTURE.md)
-
-**Implements:** `routers/precompute.py` (new), `services/job_registry.py` (new), `services/dispatcher.py` (new), `services/cache.py` (migrated to async Redis client) (ARCHITECTURE.md)
-
-**Avoids:**
-- Pitfall 1: GIL blocking event loop — use `run_in_threadpool`, never bare coroutine
-- Pitfall 2: Silent failures — wrap each combination in try/except; write error details to status key
-- Pitfall 3: Memory explosion — sequential combination execution + explicit `gc.collect()` per iteration
-- Pitfall 8: Sync Redis calls amplified by 7x — migrate to `redis.asyncio` before adding background tasks
-- Pitfall 9: Cache key correctness — verify `MD5(sorted file bytes + strategy)` for combinations matches direct `/analyze` cache key; do not include session ID or timestamps
-- Pitfall 11: Orphaned tasks on restart — add `started_at` + stale-detection in job_registry; startup hook to mark stale keys as `failed`
-- Pitfall 13: Redundant re-computation — check if all combination cache keys already exist in Redis before enqueueing
-
-**Research flag:** Needs care during implementation. The ThreadPoolExecutor concurrency model with Redis state updates requires careful sequencing. The stale-detection logic for job recovery is non-trivial. Recommend a focused implementation spike for `services/dispatcher.py` and `services/job_registry.py` before wiring the router.
-
----
+**Build order within phase:**
+1. Build `PrecomputeStatus.tsx` — polling, progress bar, failed state handling
+2. Update `OverUnderPage.tsx` — call `precompute()` on file change, render `PrecomputeStatus`, reset on file change
 
 ### Phase Ordering Rationale
 
-- **Filter removal first** because it is risk-free and its deployment (with cache flush) is a prerequisite for pre-computed results to have the correct shape.
-- **Auth second** because new endpoints in Phase 3 should be secured from the start; retrofitting auth onto a working pre-computation system is harder than building auth first.
-- **Pre-computation third** because it depends on a stable auth surface and unfiltered pipeline output; it is also the highest-complexity change and benefits from the reduced scope of the preceding phases.
-- This ordering is consistent across all four research files — no conflicts.
+- Auth must precede pre-compute: `POST /precompute` is a protected endpoint; without a valid cookie the call returns 401
+- Vite proxy must precede all auth code: SameSite cross-port issue would make the entire auth chain appear broken during development
+- `api.ts` migration must precede `AuthContext`: the context calls `apiFetch` and registers the `auth:unauthorized` listener
+- `ProtectedRoute` and `LoginPage` can be built in parallel after `AuthContext` is done
+- `PrecomputeStatus` can begin after `api.ts` migration (only needs `pollJob()` exported)
 
 ### Research Flags
 
-Phases needing deeper research during planning:
-- **Phase 3 (Async Pre-computation):** The `dispatcher.py` + `job_registry.py` interaction under concurrent modification needs careful design. Specifically: Redis atomic increment for progress updates (`HINCRBY`), how to handle partial failures (one combination fails, others succeed), and the stale-detection startup hook pattern.
-
 Phases with standard patterns (skip research-phase):
-- **Phase 1 (Filter Removal):** Pure code deletion. Pattern is trivially clear.
-- **Phase 2 (JWT Auth):** FastAPI's official JWT + cookie auth tutorial covers this completely with the recommended library stack.
+- **Phase 1 (Auth Chain):** All patterns are well-documented. Backend contracts confirmed from source. React Router v7 guard pattern is identical to v6. No unknowns.
+- **Phase 2 (Pre-compute Polling):** Backend contract confirmed from `routers/precompute.py`. `setInterval` + `useEffect` cleanup is a standard React pattern. No unknowns.
+
+No phases require `/gsd:research-phase` — all conclusions drawn from direct codebase inspection at HIGH confidence.
 
 ---
 
@@ -162,51 +137,35 @@ Phases with standard patterns (skip research-phase):
 
 | Area | Confidence | Notes |
 |------|------------|-------|
-| Stack | HIGH | PyJWT and pwdlib versions confirmed via PyPI and FastAPI official PR migrations. ThreadPoolExecutor pattern confirmed via FastAPI official docs. SAQ version confirmed via PyPI (though SAQ is ultimately not needed). |
-| Features | HIGH | Table stakes derived from project requirements (PROJECT.md) cross-referenced with FastAPI async task and auth patterns. Anti-features are explicitly scope-bounded. |
-| Architecture | HIGH | Component boundaries derived from existing codebase structure and well-documented FastAPI patterns. ThreadPoolExecutor vs ProcessPoolExecutor decision is well-reasoned (pandas GIL release during numpy ops). |
-| Pitfalls | HIGH | Critical pitfalls verified against FastAPI official docs, confirmed CVE reports (python-jose), and firsthand implementation reports. CSRF + cookie auth pitfall is confirmed security principle. |
+| Stack | HIGH | All technologies confirmed from `package.json` at pinned versions. Zero library lookup needed. |
+| Features | HIGH | Backend contracts confirmed by reading `routers/auth.py`, `routers/precompute.py` directly. Feature list is exhaustive. |
+| Architecture | HIGH | All conclusions from reading actual source files: `api.ts`, `routes.ts`, `App.tsx`, `SessionContext.tsx`, `OverUnderPage.tsx`, `middleware/auth.py`. No training-data assumptions. |
+| Pitfalls | HIGH | Critical pitfalls (cross-port cookie, flash redirect, interval leak) are well-documented in browser specs and confirmed applicable by reading the codebase. |
 
 **Overall confidence:** HIGH
 
 ### Gaps to Address
 
-- **Sequential vs concurrent combination execution trade-off:** PITFALLS.md recommends sequential execution (memory safety), while ARCHITECTURE.md suggests concurrent with `max_workers=min(4, cpu_count)`. These are in tension. During Phase 3 implementation, measure actual peak memory usage with the VPS's specific RAM limit before deciding. Start sequential; add concurrency only if latency is unacceptable and memory headroom exists.
-
-- **`redis.asyncio` migration scope:** The existing codebase uses synchronous `redis-py` throughout. PITFALLS.md flags this as a prerequisite for Phase 3. The migration scope (how many call sites, which services) needs assessment before Phase 3 begins — this is not a small change if the sync client is deeply embedded.
-
-- **CORS `allow_origins` current value:** PITFALLS.md references `allow_origins=["*"]` as a confirmed concern in CONCERNS.md. This must be resolved as part of Phase 2, not deferred. Needs confirmation of the actual frontend domain(s) for the CORS allowlist.
-
-- **Token expiry alignment (cookie `max_age` vs JWT `exp`):** Pitfall 14 notes these must match. Default value for `JWT_EXPIRE_HOURS` should be decided (24h recommended for single-user convenience) and documented in `.env.example`.
+- **`/auth/me` endpoint absent:** `GET /strategies` is used as the auth probe on mount (no `/auth/me` exists). If the backend adds `/auth/me` later, update `AuthContext` probe. Non-blocking for now — `GET /strategies` works and is called at startup anyway.
+- **`SECURE_COOKIES` in dev:** Confirm `SECURE_COOKIES=false` is set in the backend dev `.env` before first test. Required for cookies to be sent over `http://` in local development.
+- **Token expiry toast:** The "Sessao expirada" toast is a polish step. The central 401 interceptor (clears auth, redirects) must ship in Phase 1. The toast can be a one-liner added at the end of Phase 1 or deferred — the redirect already handles the user correctly.
 
 ---
 
 ## Sources
 
 ### Primary (HIGH confidence)
-- FastAPI official security docs — https://fastapi.tiangolo.com/tutorial/security/oauth2-jwt/ — JWT + pwdlib + PyJWT auth patterns
-- FastAPI BackgroundTasks official docs — https://fastapi.tiangolo.com/tutorial/background-tasks/ — async task limitations
-- PyJWT PyPI (2.12.1, Mar 2026) — https://pypi.org/project/PyJWT/
-- pwdlib PyPI (0.3.0, Oct 2025) — https://pypi.org/project/pwdlib/
-- FastAPI JWT migration PR #11589 — https://github.com/fastapi/fastapi/pull/11589 — confirms PyJWT as official replacement
-- python-jose abandonment — https://github.com/fastapi/fastapi/discussions/11345 — FastAPI maintainer confirms migration
-- passlib/pwdlib migration — https://github.com/fastapi/fastapi/discussions/11773 — confirms passlib deprecation
-- ARQ maintenance-only — https://github.com/python-arq/arq/issues/437 — ARQ GitHub issue confirming status
-- SAQ PyPI (0.26.3, Mar 2026) — https://pypi.org/project/saq/
-- pandas docs (thread safety / GIL) — https://pandas.pydata.org/docs/user_guide/gotchas.html
+- Codebase direct inspection: `esoccerdashboard/src/app/services/api.ts`, `routes.ts`, `App.tsx`, `SessionContext.tsx`, `components/Layout.tsx`, `components/OverUnderPage.tsx`, `package.json`
+- Backend source: `routers/auth.py`, `routers/precompute.py`, `middleware/auth.py`, `config/settings.py`, `main.py`
+- React Router v7 official docs — nested route protection patterns
+- MDN fetch credentials mode — `credentials: "include"` behavior specification
 
 ### Secondary (MEDIUM confidence)
-- Managing Background Tasks: BackgroundTasks vs ARQ — https://davidmuraya.com/blog/fastapi-background-tasks-arq-vs-built-in/
-- Managing Long-Running Operations in FastAPI — https://leapcell.io/blog/managing-background-tasks-and-long-running-operations-in-fastapi
-- FastAPI run_in_executor vs run_in_threadpool — https://sentry.io/answers/fastapi-difference-between-run-in-executor-and-run-in-threadpool/
-- FastAPI Security Design Pitfalls — https://blog.greeden.me/en/2025/10/14/a-beginners-guide-to-serious-security-design-with-fastapi-authentication-authorization-jwt-oauth2-cookie-sessions-rbac-scopes-csrf-protection-and-real-world-pitfalls/
-- Celery vs ARQ comparison — https://leapcell.io/blog/celery-versus-arq-choosing-the-right-task-queue-for-python-applications
-- FastAPI Best Practices (zhanymkanov) — https://github.com/zhanymkanov/fastapi-best-practices
-
-### Tertiary (LOW confidence / inferred)
-- "Store progress metadata directly in Redis" pattern for SAQ — inferred from common FastAPI + Redis patterns; not verified against a specific authoritative source for this exact use case
+- React SPA HttpOnly cookie auth patterns — consistent across multiple community sources
+- Auth context `isLoading` guard pattern — documented in auth0-react issue tracker and community React auth guides
+- SameSite=Lax cross-port localhost behavior — documented in browser-specific bug reports; Vite proxy is universally recommended mitigation
+- Dan Abramov / React official docs — declarative `setInterval` with hooks, `useEffect` cleanup patterns
 
 ---
-
 *Research completed: 2026-04-02*
 *Ready for roadmap: yes*
