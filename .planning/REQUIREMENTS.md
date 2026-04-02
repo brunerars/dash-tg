@@ -16,8 +16,8 @@
 - [ ] **AUTH-01**: Usuario pode fazer login com username + senha via `POST /auth/login`
 - [ ] **AUTH-02**: Endpoints protegidos rejeitam requests sem token valido
 - [ ] **AUTH-03**: Usuario pode fazer logout via `POST /auth/logout`
-- [ ] **AUTH-04**: Senha armazenada como hash bcrypt em variavel de ambiente
-- [ ] **AUTH-05**: CORS restrito ao dominio do frontend (antes de habilitar cookie auth)
+- [x] **AUTH-04**: Senha armazenada como hash bcrypt em variavel de ambiente
+- [x] **AUTH-05**: CORS restrito ao dominio do frontend (antes de habilitar cookie auth)
 
 ### Pre-computacao
 
@@ -58,8 +58,8 @@
 | AUTH-01 | Phase 2 | Pending |
 | AUTH-02 | Phase 2 | Pending |
 | AUTH-03 | Phase 2 | Pending |
-| AUTH-04 | Phase 2 | Pending |
-| AUTH-05 | Phase 2 | Pending |
+| AUTH-04 | Phase 2 | Complete |
+| AUTH-05 | Phase 2 | Complete |
 | PREC-01 | Phase 3 | Pending |
 | PREC-02 | Phase 3 | Pending |
 | PREC-03 | Phase 3 | Pending |
