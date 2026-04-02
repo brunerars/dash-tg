@@ -52,26 +52,26 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| FILT-01 | Pending | Pending |
-| FILT-02 | Pending | Pending |
-| FILT-03 | Pending | Pending |
-| AUTH-01 | Pending | Pending |
-| AUTH-02 | Pending | Pending |
-| AUTH-03 | Pending | Pending |
-| AUTH-04 | Pending | Pending |
-| AUTH-05 | Pending | Pending |
-| PREC-01 | Pending | Pending |
-| PREC-02 | Pending | Pending |
-| PREC-03 | Pending | Pending |
-| PREC-04 | Pending | Pending |
-| PREC-05 | Pending | Pending |
-| PREC-06 | Pending | Pending |
+| FILT-01 | Phase 1 | Pending |
+| FILT-02 | Phase 1 | Pending |
+| FILT-03 | Phase 1 | Pending |
+| AUTH-01 | Phase 2 | Pending |
+| AUTH-02 | Phase 2 | Pending |
+| AUTH-03 | Phase 2 | Pending |
+| AUTH-04 | Phase 2 | Pending |
+| AUTH-05 | Phase 2 | Pending |
+| PREC-01 | Phase 3 | Pending |
+| PREC-02 | Phase 3 | Pending |
+| PREC-03 | Phase 3 | Pending |
+| PREC-04 | Phase 3 | Pending |
+| PREC-05 | Phase 3 | Pending |
+| PREC-06 | Phase 3 | Pending |
 
 **Coverage:**
 - v1 requirements: 14 total
-- Mapped to phases: 0
-- Unmapped: 14
+- Mapped to phases: 14
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-04-02*
-*Last updated: 2026-04-02 after initial definition*
+*Last updated: 2026-04-02 after roadmap creation*
