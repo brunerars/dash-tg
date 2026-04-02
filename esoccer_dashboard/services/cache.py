@@ -6,7 +6,7 @@ import json
 
 import redis
 
-from config.settings import REDIS_URL, CACHE_TTL_ANALYSIS, CACHE_TTL_EXPORT
+from config.settings import REDIS_URL, CACHE_TTL_ANALYSIS, CACHE_TTL_EXPORT, CACHE_TTL_JOB
 
 _client: redis.Redis | None = None
 
@@ -95,6 +95,26 @@ def delete_cache_key(cache_key: str) -> bool:
     r = get_redis_client()
     deleted = r.delete(f"analysis:{cache_key}", f"export:{cache_key}", f"blueprint:{cache_key}")
     return deleted > 0
+
+
+def store_job(
+    job_id: str,
+    status: str,
+    cache_key: str | None = None,
+    error: str | None = None,
+    ttl: int = CACHE_TTL_JOB,
+) -> None:
+    """Store or update a pre-computation job record. TTL set at creation (PREC-06)."""
+    r = get_redis_client()
+    payload = {"job_id": job_id, "status": status, "cache_key": cache_key, "error": error}
+    r.setex(f"job:{job_id}", ttl, json.dumps(payload))
+
+
+def get_job(job_id: str) -> dict | None:
+    """Retrieve a job record by ID. Returns None if expired or not found."""
+    r = get_redis_client()
+    raw = r.get(f"job:{job_id}")
+    return json.loads(raw) if raw else None
 
 
 def get_cache_stats() -> dict:

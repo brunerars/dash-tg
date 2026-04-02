@@ -48,6 +48,126 @@ class _UploadFileAdapter:
 
 
 # ---------------------------------------------------------------------------
+# Sync pipeline — callable from any thread (e.g. ThreadPoolExecutor)
+# ---------------------------------------------------------------------------
+def _build_analysis_result(
+    strategy_name: str,
+    files_contents: list[tuple[str, bytes]],
+    date_from: str | None = None,
+    date_to: str | None = None,
+    horarios: list[str] | None = None,
+) -> dict:
+    """Full synchronous compute pipeline.
+
+    Returns the result dict (without ``cache_hit`` — caller adds it).
+    Designed to be called both from ``_analyze_with_strategy`` (via
+    ``get_or_compute``) and from the precompute router via
+    ``ThreadPoolExecutor``.
+    """
+    estrategia = get_strategy_internal(strategy_name)
+
+    files_bytes = [c for _, c in files_contents]
+    cache_key = gerar_cache_key(files_bytes, strategy_name, date_from, date_to, horarios)
+
+    # 1. Carregar com cache individual por arquivo
+    frames: list[pd.DataFrame] = []
+    for name, content in files_contents:
+        file_hash = hashlib.md5(content).hexdigest()
+        cached_pickle = get_file_df(file_hash)
+        if cached_pickle:
+            frames.append(pickle.loads(cached_pickle))
+        else:
+            adapter = _UploadFileAdapter(name, content)
+            result = load_tips_enviadas([adapter])
+            store_file_df(file_hash, pickle.dumps(result.df))
+            frames.append(result.df)
+
+    df = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+    load_result = LoadResult(df=df, total_jogos_brutos=int(len(df)))
+
+    # 1b. Filtrar por período (se informado) — antes da normalização e dedup
+    if date_from or date_to:
+        if date_from:
+            df = df[df["Data"] >= date_type.fromisoformat(date_from)]
+        if date_to:
+            df = df[df["Data"] <= date_type.fromisoformat(date_to)]
+        if df.empty:
+            raise HTTPException(
+                status_code=422,
+                detail="Nenhum jogo encontrado no período especificado.",
+            )
+        df = df.reset_index(drop=True)
+        load_result = LoadResult(df=df, total_jogos_brutos=len(df))
+
+    # 1c. Capturar minutos únicos de "Horario Jogo" (MM:SS → minuto)
+    # Valores como "05:04" são parseados como time(5,4) — .hour dá o minuto do jogo
+    horarios_unicos: list[str] = []
+    if "Horario Jogo" in df.columns and not df.empty:
+        minutes = df["Horario Jogo"].dropna().apply(lambda t: t.hour)
+        horarios_unicos = sorted(set(str(m) for m in minutes), key=lambda x: int(x))
+
+    # 1d. Filtrar por minutos de jogo selecionados
+    if horarios and "Horario Jogo" in df.columns:
+        parsed_minutes = [int(h) for h in horarios]
+        df = df[df["Horario Jogo"].apply(lambda t: t.hour).isin(parsed_minutes)]
+        if df.empty:
+            raise HTTPException(
+                status_code=422,
+                detail="Nenhum jogo encontrado nos horários selecionados.",
+            )
+        df = df.reset_index(drop=True)
+        load_result = LoadResult(df=df, total_jogos_brutos=len(df))
+
+    # 2. Normalizar dupla
+    df = add_dupla_normalizada(load_result.df)
+
+    # 3. Deduplicar — usando dedup_key da estratégia
+    dedup_result = deduplicate_clusters(
+        df,
+        dedup_key=estrategia["dedup_key_internal"],
+    )
+
+    # 3b. Armazenar dados de blueprint (dedup df completo para auditoria)
+    dedup_json = dedup_result.df.to_json(orient="records", date_format="iso", default_handler=str)
+    store_blueprint(cache_key, dedup_json)
+
+    # 4. Calcular métricas — usando group_by e janela_horas da estratégia
+    metrics_result = compute_metrics(
+        dedup_result.df,
+        group_by=estrategia["group_by_internal"],
+        sistema_red_janela_horas=estrategia["sistema_red_janela_horas"],
+    )
+
+    # 5. Sem filtros de exibição — frontend controla min_jogos e min_green_pct (FILT-01, FILT-02)
+    mdf = metrics_result.df
+
+    # 6. Serializar para dict (JSON-safe)
+    duplas = mdf.to_dict(orient="records") if not mdf.empty else []
+    for row in duplas:
+        for k, v in row.items():
+            if hasattr(v, "item"):
+                row[k] = v.item()
+
+    # 7. Gerar e armazenar xlsx para export
+    _store_xlsx(mdf, cache_key)
+
+    result: dict = {
+        "cache_key": cache_key,
+        "strategy": strategy_name,
+        "total_jogos_brutos": load_result.total_jogos_brutos,
+        "total_jogos_apos_dedup": dedup_result.total_jogos_apos_dedup,
+        "duplas": duplas,
+    }
+    if date_from:
+        result["date_from"] = date_from
+    if date_to:
+        result["date_to"] = date_to
+    if horarios_unicos:
+        result["horarios_unicos"] = horarios_unicos
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Helper interno: pipeline completo dado files_contents já em memória
 # ---------------------------------------------------------------------------
 async def _analyze_with_strategy(
@@ -57,109 +177,11 @@ async def _analyze_with_strategy(
     date_to: str | None = None,
     horarios: list[str] | None = None,
 ) -> dict:
-    estrategia = get_strategy_internal(strategy_name)  # garantido válido pelo chamador
-
     files_bytes = [c for _, c in files_contents]
     cache_key = gerar_cache_key(files_bytes, strategy_name, date_from, date_to, horarios)
 
     def compute() -> dict:
-        # 1. Carregar com cache individual por arquivo
-        frames: list[pd.DataFrame] = []
-        for name, content in files_contents:
-            file_hash = hashlib.md5(content).hexdigest()
-            cached_pickle = get_file_df(file_hash)
-            if cached_pickle:
-                frames.append(pickle.loads(cached_pickle))
-            else:
-                adapter = _UploadFileAdapter(name, content)
-                result = load_tips_enviadas([adapter])
-                store_file_df(file_hash, pickle.dumps(result.df))
-                frames.append(result.df)
-
-        df = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
-        load_result = LoadResult(df=df, total_jogos_brutos=int(len(df)))
-
-        # 1b. Filtrar por período (se informado) — antes da normalização e dedup
-        if date_from or date_to:
-            if date_from:
-                df = df[df["Data"] >= date_type.fromisoformat(date_from)]
-            if date_to:
-                df = df[df["Data"] <= date_type.fromisoformat(date_to)]
-            if df.empty:
-                raise HTTPException(
-                    status_code=422,
-                    detail="Nenhum jogo encontrado no período especificado.",
-                )
-            df = df.reset_index(drop=True)
-            load_result = LoadResult(df=df, total_jogos_brutos=len(df))
-
-        # 1c. Capturar valores únicos de "Horario Jogo" (tempo da partida FIFA)
-        # 1c. Capturar minutos únicos de "Horario Jogo" (MM:SS → minuto)
-        # Valores como "05:04" são parseados como time(5,4) — .hour dá o minuto do jogo
-        horarios_unicos: list[str] = []
-        if "Horario Jogo" in df.columns and not df.empty:
-            minutes = df["Horario Jogo"].dropna().apply(lambda t: t.hour)
-            horarios_unicos = sorted(set(str(m) for m in minutes), key=lambda x: int(x))
-
-        # 1d. Filtrar por minutos de jogo selecionados
-        if horarios and "Horario Jogo" in df.columns:
-            parsed_minutes = [int(h) for h in horarios]
-            df = df[df["Horario Jogo"].apply(lambda t: t.hour).isin(parsed_minutes)]
-            if df.empty:
-                raise HTTPException(
-                    status_code=422,
-                    detail="Nenhum jogo encontrado nos horários selecionados.",
-                )
-            df = df.reset_index(drop=True)
-            load_result = LoadResult(df=df, total_jogos_brutos=len(df))
-
-        # 2. Normalizar dupla
-        df = add_dupla_normalizada(load_result.df)
-
-        # 3. Deduplicar — usando dedup_key da estratégia
-        dedup_result = deduplicate_clusters(
-            df,
-            dedup_key=estrategia["dedup_key_internal"],
-        )
-
-        # 3b. Armazenar dados de blueprint (dedup df completo para auditoria)
-        dedup_json = dedup_result.df.to_json(orient="records", date_format="iso", default_handler=str)
-        store_blueprint(cache_key, dedup_json)
-
-        # 4. Calcular métricas — usando group_by e janela_horas da estratégia
-        metrics_result = compute_metrics(
-            dedup_result.df,
-            group_by=estrategia["group_by_internal"],
-            sistema_red_janela_horas=estrategia["sistema_red_janela_horas"],
-        )
-
-        # 5. Sem filtros de exibição — frontend controla min_jogos e min_green_pct (FILT-01, FILT-02)
-        mdf = metrics_result.df
-
-        # 6. Serializar para dict (JSON-safe)
-        duplas = mdf.to_dict(orient="records") if not mdf.empty else []
-        for row in duplas:
-            for k, v in row.items():
-                if hasattr(v, "item"):
-                    row[k] = v.item()
-
-        # 7. Gerar e armazenar xlsx para export
-        _store_xlsx(mdf, cache_key)
-
-        result: dict = {
-            "cache_key": cache_key,
-            "strategy": strategy_name,
-            "total_jogos_brutos": load_result.total_jogos_brutos,
-            "total_jogos_apos_dedup": dedup_result.total_jogos_apos_dedup,
-            "duplas": duplas,
-        }
-        if date_from:
-            result["date_from"] = date_from
-        if date_to:
-            result["date_to"] = date_to
-        if horarios_unicos:
-            result["horarios_unicos"] = horarios_unicos
-        return result
+        return _build_analysis_result(strategy_name, files_contents, date_from, date_to, horarios)
 
     result, cache_hit = get_or_compute(cache_key, compute)
     result["cache_hit"] = cache_hit
