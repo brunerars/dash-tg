@@ -28,11 +28,11 @@ from esoccer_dashboard.services.deduplicator import deduplicate_clusters
 from esoccer_dashboard.services.loader import LoadResult, load_tips_enviadas
 from esoccer_dashboard.services.metrics import compute_metrics
 from esoccer_dashboard.services.normalizer import add_dupla_normalizada
-from middleware.auth import verify_api_key
+from middleware.auth import verify_jwt_cookie
 
 router = APIRouter()
 
-AuthDep = Annotated[str, Depends(verify_api_key)]
+AuthDep = Annotated[str, Depends(verify_jwt_cookie)]
 
 
 # ---------------------------------------------------------------------------
