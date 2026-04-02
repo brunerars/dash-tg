@@ -1,11 +1,22 @@
 services:
+  cache-flush:
+    build: .
+    command: python scripts/flush_stale_cache.py
+    env_file: .env
+    depends_on:
+      - redis
+    restart: "no"
+
   api:
     build: .
     ports:
       - "8000:8000"
     env_file: .env
     depends_on:
-      - redis
+      redis:
+        condition: service_started
+      cache-flush:
+        condition: service_completed_successfully
     restart: unless-stopped
     volumes:
       - ./data:/app/data:ro

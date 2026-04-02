@@ -133,13 +133,8 @@ async def _analyze_with_strategy(
             sistema_red_janela_horas=estrategia["sistema_red_janela_horas"],
         )
 
-        # 5. Aplicar filtros — usando min_jogos e min_green_pct da estratégia
+        # 5. Sem filtros de exibição — frontend controla min_jogos e min_green_pct (FILT-01, FILT-02)
         mdf = metrics_result.df
-        if not mdf.empty:
-            mdf = mdf[
-                (mdf["quantidade_entradas"] >= estrategia["min_jogos"])
-                & (mdf["percentual_green"] >= estrategia["min_green_pct"])
-            ].copy()
 
         # 6. Serializar para dict (JSON-safe)
         duplas = mdf.to_dict(orient="records") if not mdf.empty else []
