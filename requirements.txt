@@ -9,3 +9,5 @@ python-dateutil
 numpy
 pydantic
 pytest
+pyjwt
+pwdlib[argon2]
