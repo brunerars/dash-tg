@@ -1,10 +1,10 @@
-# Dashboard TG — Melhorias v2
+# Dashboard TG — Frontend Integration v2
 
 ## What This Is
 
-API backend (FastAPI + Redis) para dashboard de analise eSoccer multi-estrategia. Consome planilhas `.xlsx` de diferentes casas de apostas, processa metricas (deduplicacao, normalizacao, sistema red, SRPT) e serve resultados via HTTP. O frontend consome a API hospedada na VPS.
+Dashboard de analise eSoccer multi-estrategia. Backend FastAPI + Redis consome planilhas `.xlsx`, processa metricas e serve via HTTP. Frontend React + Vite + shadcn/ui consome a API hospedada na VPS.
 
-Este milestone foca em 3 melhorias: pre-computacao assincrona de combinacoes de planilhas para Over/Under, remocao de filtros fixos do backend, e adicao de autenticacao por login/senha.
+Milestone v1.0 entregou 3 melhorias backend: remocao de filtros, JWT auth, e pre-computacao async. Este milestone (v2.0) integra o frontend com essas melhorias.
 
 ## Core Value
 
@@ -30,26 +30,36 @@ O usuario sobe as planilhas e ja encontra todos os resultados computados — sem
 
 ### Active
 
-- [x] Pre-computacao assincrona de todas as combinacoes de planilhas para Over/Under — Validated in Phase 3: Async Pre-computation
-- [x] Remover filtros min_jogos e min_green_pct do backend — Validated in Phase 1: Backend Filter Removal
-- [x] Autenticacao por login/senha (usuario unico) — Validated in Phase 2: JWT Authentication
+- [ ] Tela de login com username/senha (JWT cookie auth)
+- [ ] Migrar API client de X-API-Key para cookies JWT (credentials: "include")
+- [ ] Protecao de rotas — redirect para /login em 401 Unauthorized
+- [ ] Integracao pre-compute na tela Over/Under (POST /precompute + polling GET /jobs)
 
 ### Out of Scope
 
 - Multi-user / auto-cadastro — cliente unico, nao precisa
 - Pre-computacao para estrategia DALE (eSoccer — Dupla) — so Over/Under precisa de otimizacao
 - OAuth / login social — desnecessario para usuario unico
-- Frontend — este milestone e so backend/API
+- Backend changes — milestone v1.0 entregou todas as APIs necessarias
+
+## Current Milestone: v2.0 Frontend Integration
+
+**Goal:** Integrar o frontend React com as 3 melhorias do backend (JWT auth, filtros client-side, pre-computacao async)
+
+**Target features:**
+- Tela de login com username/senha (POST /auth/login, cookie JWT)
+- Migrar API client de X-API-Key para cookies JWT (credentials: "include")
+- Protecao de rotas — redirect para /login em 401
+- Integracao pre-compute na tela Over/Under (POST /precompute + polling GET /jobs)
 
 ## Context
 
 - Projeto brownfield com codebase funcional em producao
-- Bases Over/Under tem ~150k linhas — performance e o motivador da pre-computacao
-- Quando o usuario sobe 3 planilhas (A, B, C), o sistema precisa rodar todas as combinacoes: A, B, C, A+B, A+C, B+C, A+B+C = 7 combinacoes, cada uma para a estrategia Over/Under
-- Cada planilha representa uma casa de apostas diferente
-- Hoje o usuario precisa clicar para rodar cada analise manualmente
-- Filtros min_jogos e min_green_pct sao aplicados no backend mas devem migrar para o frontend
-- Auth atual e por API Key no header — precisa virar login/senha com sessao
+- Backend entrega JWT auth (HttpOnly cookie + Bearer header), pre-compute async, e dados sem filtro
+- Frontend React 18 + Vite 6 + Tailwind + shadcn/ui + react-router v7
+- API client atual usa fetch() com header X-API-Key — precisa migrar pra cookie JWT
+- CORS ja esta lockado a FRONTEND_ORIGIN com allow_credentials=true
+- Pre-compute gera 2^N-1 combinacoes para Over/Under — frontend precisa polling de status
 
 ## Constraints
 
@@ -85,4 +95,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-04-02 after Phase 3 completion*
+*Last updated: 2026-04-02 — Milestone v2.0 started*
