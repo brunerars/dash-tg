@@ -60,7 +60,7 @@ Plans:
 **Plans**: 2 plans
 
 Plans:
-- [ ] 03-01-PLAN.md — Extract sync pipeline + add Redis job state infrastructure
+- [x] 03-01-PLAN.md — Extract sync pipeline + add Redis job state infrastructure
 - [ ] 03-02-PLAN.md — Create precompute router (POST /precompute, GET /jobs) + wire into app
 
 ## Progress

@@ -23,10 +23,10 @@
 
 - [ ] **PREC-01**: Upload de N planilhas dispara automaticamente todas as 2^N-1 combinacoes para Over/Under
 - [ ] **PREC-02**: Endpoint retorna 202 Accepted com job IDs imediatamente
-- [ ] **PREC-03**: Resultados de cada combinacao salvos no Redis conforme ficam prontos
+- [x] **PREC-03**: Resultados de cada combinacao salvos no Redis conforme ficam prontos
 - [ ] **PREC-04**: GET /jobs/{job_id} retorna status (pending/running/completed/failed) + cache_key
-- [ ] **PREC-05**: Pipeline roda em thread/process pool sem bloquear o event loop
-- [ ] **PREC-06**: Jobs expiram do Redis com TTL
+- [x] **PREC-05**: Pipeline roda em thread/process pool sem bloquear o event loop
+- [x] **PREC-06**: Jobs expiram do Redis com TTL
 
 ## v2 Requirements
 
@@ -62,10 +62,10 @@
 | AUTH-05 | Phase 2 | Complete |
 | PREC-01 | Phase 3 | Pending |
 | PREC-02 | Phase 3 | Pending |
-| PREC-03 | Phase 3 | Pending |
+| PREC-03 | Phase 3 | Complete |
 | PREC-04 | Phase 3 | Pending |
-| PREC-05 | Phase 3 | Pending |
-| PREC-06 | Phase 3 | Pending |
+| PREC-05 | Phase 3 | Complete |
+| PREC-06 | Phase 3 | Complete |
 
 **Coverage:**
 - v1 requirements: 14 total
