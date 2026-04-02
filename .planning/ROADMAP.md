@@ -41,7 +41,11 @@ Plans:
   3. User can POST /auth/logout and the session cookie is cleared
   4. The password stored in the environment is an argon2 hash — never plaintext
   5. CORS allow_origins is locked to the frontend domain (not wildcard) before cookie auth is active
-**Plans**: TBD
+**Plans**: 2 plans
+
+Plans:
+- [ ] 02-01-PLAN.md — Add JWT dependencies, auth settings, and JWT cookie middleware
+- [ ] 02-02-PLAN.md — Create auth router (login/logout) and wire JWT into all endpoints + CORS
 
 ### Phase 3: Async Pre-computation
 **Goal**: Uploading N spreadsheets automatically triggers computation of all 2^N-1 Over/HT combinations in background; user finds results ready without waiting
@@ -63,5 +67,5 @@ Phases execute in numeric order: 1 → 2 → 3
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Backend Filter Removal | 0/1 | Not started | - |
-| 2. JWT Authentication | 0/? | Not started | - |
+| 2. JWT Authentication | 0/2 | Not started | - |
 | 3. Async Pre-computation | 0/? | Not started | - |
