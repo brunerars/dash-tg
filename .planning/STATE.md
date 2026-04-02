@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: executing
-stopped_at: Completed 02-jwt-authentication/02-01-PLAN.md
-last_updated: "2026-04-02T15:57:23.066Z"
+status: verifying
+stopped_at: Completed 02-jwt-authentication/02-02-PLAN.md
+last_updated: "2026-04-02T15:59:55.085Z"
 last_activity: 2026-04-02
 progress:
   total_phases: 3
-  completed_phases: 1
+  completed_phases: 2
   total_plans: 3
-  completed_plans: 2
+  completed_plans: 3
   percent: 0
 ---
 
@@ -27,7 +27,7 @@ See: .planning/PROJECT.md (updated 2026-04-02)
 
 Phase: 02 (jwt-authentication) — EXECUTING
 Plan: 2 of 2
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-04-02
 
 Progress: [░░░░░░░░░░] 0%
@@ -53,6 +53,7 @@ Progress: [░░░░░░░░░░] 0%
 
 *Updated after each plan completion*
 | Phase 02-jwt-authentication P01 | 2 | 2 tasks | 4 files |
+| Phase 02-jwt-authentication P02 | 2 | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -64,6 +65,8 @@ Recent decisions affecting current work:
 - (decisions will be logged as phases complete)
 - [Phase 02-jwt-authentication]: Used argon2 (pwdlib) over bcrypt: more secure, official FastAPI recommendation, per ROADMAP.md
 - [Phase 02-jwt-authentication]: Dual-mode JWT verification: Cookie for browser, Bearer header for Swagger UI in single verify_jwt_cookie dependency
+- [Phase 02-jwt-authentication]: Timing-safe login: verify_password always called even on wrong username to prevent timing oracle attacks
+- [Phase 02-jwt-authentication]: CORS locked to FRONTEND_ORIGIN with allow_credentials=True — wildcard CORS removed entirely
 
 ### Pending Todos
 
@@ -77,6 +80,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-02T15:57:23.063Z
-Stopped at: Completed 02-jwt-authentication/02-01-PLAN.md
+Last session: 2026-04-02T15:59:55.081Z
+Stopped at: Completed 02-jwt-authentication/02-02-PLAN.md
 Resume file: None
