@@ -30,7 +30,7 @@ O usuario sobe as planilhas e ja encontra todos os resultados computados — sem
 
 ### Active
 
-- [ ] Pre-computacao assincrona de todas as combinacoes de planilhas para Over/Under
+- [x] Pre-computacao assincrona de todas as combinacoes de planilhas para Over/Under — Validated in Phase 3: Async Pre-computation
 - [x] Remover filtros min_jogos e min_green_pct do backend — Validated in Phase 1: Backend Filter Removal
 - [x] Autenticacao por login/senha (usuario unico) — Validated in Phase 2: JWT Authentication
 
@@ -62,10 +62,10 @@ O usuario sobe as planilhas e ja encontra todos os resultados computados — sem
 
 | Decision | Rationale | Outcome |
 |----------|-----------|---------|
-| Pre-computacao apenas para Over/Under | DALE nao tem problema de performance | — Pending |
+| Pre-computacao apenas para Over/Under | DALE nao tem problema de performance | ✓ Phase 3 |
 | Filtros min_jogos/min_green_pct saem do backend | Controle deve ser do usuario no frontend | ✓ Phase 1 |
 | Auth por login unico (sem multi-user) | Cliente unico, simplicidade | ✓ Phase 2 |
-| Manter Redis como unico store | Evitar complexidade de banco adicional | — Pending |
+| Manter Redis como unico store | Evitar complexidade de banco adicional | ✓ Phase 3 |
 
 ## Evolution
 
@@ -85,4 +85,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-04-02 after Phase 2 completion*
+*Last updated: 2026-04-02 after Phase 3 completion*
