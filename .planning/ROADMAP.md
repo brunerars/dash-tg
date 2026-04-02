@@ -1,22 +1,14 @@
-# Roadmap: Dashboard TG — Melhorias v2
+# Roadmap: Dashboard TG
 
-## Overview
+## Milestones
 
-Three self-contained backend improvements delivered in risk order: filter removal (pure deletion, no new code), JWT authentication (replaces X-API-Key, isolated to one router and one middleware file), and async pre-computation (most complex, depends on the two preceding phases being stable). Each phase has a clean delivery boundary and unblocks the next.
+- ✅ **v1.0 Backend Melhorias** - Phases 1-3 (shipped 2026-04-02)
+- 🚧 **v2.0 Frontend Integration** - Phases 4-5 (in progress)
 
 ## Phases
 
-**Phase Numbering:**
-- Integer phases (1, 2, 3): Planned milestone work
-- Decimal phases (2.1, 2.2): Urgent insertions (marked with INSERTED)
-
-Decimal phases appear between their surrounding integers in numeric order.
-
-- [ ] **Phase 1: Backend Filter Removal** - Remove min_jogos and min_green_pct from API response pipeline; frontend takes ownership of filtering
-- [ ] **Phase 2: JWT Authentication** - Replace X-API-Key header with single-user login/password JWT auth via HttpOnly cookie
-- [x] **Phase 3: Async Pre-computation** - Non-blocking upload that auto-enqueues all 2^N-1 Over/HT combinations in background; polling endpoint for job status (completed 2026-04-02)
-
-## Phase Details
+<details>
+<summary>✅ v1.0 Backend Melhorias (Phases 1-3) - SHIPPED 2026-04-02</summary>
 
 ### Phase 1: Backend Filter Removal
 **Goal**: API returns the full unfiltered metrics dataset; frontend controls what the user sees
@@ -29,7 +21,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 **Plans**: 1 plan
 
 Plans:
-- [ ] 01-01-PLAN.md — Remove display filters from pipeline + deploy-time Redis cache flush
+- [x] 01-01-PLAN.md — Remove display filters from pipeline + deploy-time Redis cache flush
 
 ### Phase 2: JWT Authentication
 **Goal**: Users authenticate with username + password and receive a JWT; all protected endpoints validate the token instead of the API Key header
@@ -63,13 +55,45 @@ Plans:
 - [x] 03-01-PLAN.md — Extract sync pipeline + add Redis job state infrastructure
 - [x] 03-02-PLAN.md — Create precompute router (POST /precompute, GET /jobs) + wire into app
 
+</details>
+
+### 🚧 v2.0 Frontend Integration (In Progress)
+
+**Milestone Goal:** Integrar o frontend React com JWT cookie auth, migrar API client de X-API-Key para cookies, e implementar polling de pre-computacao na tela Over/Under.
+
+#### Phase 4: Auth Chain + API Migration
+**Goal**: Users authenticate via a login page and every API call uses cookie auth — the old X-API-Key mechanism is fully removed
+**Depends on**: Phase 3
+**Requirements**: AUTH-FE-01, AUTH-FE-02, AUTH-FE-03, API-MIG-01, API-MIG-02
+**Success Criteria** (what must be TRUE):
+  1. User can navigate to /login, enter username + password, and reach the dashboard — the cookie is set and all subsequent API calls succeed
+  2. Accessing any protected route without a valid session redirects to /login without a flash of the dashboard content
+  3. Clicking logout clears the session, redirects to /login, and a subsequent back-navigation does not restore the dashboard
+  4. Any mid-session 401 (expired token) redirects to /login automatically without a blank error screen
+  5. No request to the backend carries an X-API-Key header — VITE_API_KEY is absent from all env files and build config
+**Plans**: TBD
+**UI hint**: yes
+
+#### Phase 5: Pre-compute Polling
+**Goal**: Uploading files on the Over/Under page automatically triggers pre-computation and the UI shows live progress until all combinations are ready
+**Depends on**: Phase 4
+**Requirements**: PREC-FE-01, PREC-FE-02, PREC-FE-03
+**Success Criteria** (what must be TRUE):
+  1. Selecting files on the Over/Under page automatically calls POST /precompute without any additional user action
+  2. The UI shows a progress indicator (X of N jobs complete) while jobs are running — the user knows computation is in flight
+  3. When all jobs reach completed status, analysis results load automatically and the user sees data without clicking Analyze
+**Plans**: TBD
+**UI hint**: yes
+
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 → 2 → 3
+Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 
-| Phase | Plans Complete | Status | Completed |
-|-------|----------------|--------|-----------|
-| 1. Backend Filter Removal | 0/1 | Not started | - |
-| 2. JWT Authentication | 1/2 | In Progress|  |
-| 3. Async Pre-computation | 2/2 | Complete   | 2026-04-02 |
+| Phase | Milestone | Plans Complete | Status | Completed |
+|-------|-----------|----------------|--------|-----------|
+| 1. Backend Filter Removal | v1.0 | 1/1 | Complete | 2026-04-02 |
+| 2. JWT Authentication | v1.0 | 2/2 | Complete | 2026-04-02 |
+| 3. Async Pre-computation | v1.0 | 2/2 | Complete | 2026-04-02 |
+| 4. Auth Chain + API Migration | v2.0 | 0/TBD | Not started | - |
+| 5. Pre-compute Polling | v2.0 | 0/TBD | Not started | - |

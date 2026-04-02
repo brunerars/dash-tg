@@ -90,21 +90,21 @@
 | PREC-04 | Phase 3 (v1.0) | Complete |
 | PREC-05 | Phase 3 (v1.0) | Complete |
 | PREC-06 | Phase 3 (v1.0) | Complete |
-| AUTH-FE-01 | TBD | Pending |
-| AUTH-FE-02 | TBD | Pending |
-| AUTH-FE-03 | TBD | Pending |
-| API-MIG-01 | TBD | Pending |
-| API-MIG-02 | TBD | Pending |
-| PREC-FE-01 | TBD | Pending |
-| PREC-FE-02 | TBD | Pending |
-| PREC-FE-03 | TBD | Pending |
+| AUTH-FE-01 | Phase 4 (v2.0) | Pending |
+| AUTH-FE-02 | Phase 4 (v2.0) | Pending |
+| AUTH-FE-03 | Phase 4 (v2.0) | Pending |
+| API-MIG-01 | Phase 4 (v2.0) | Pending |
+| API-MIG-02 | Phase 4 (v2.0) | Pending |
+| PREC-FE-01 | Phase 5 (v2.0) | Pending |
+| PREC-FE-02 | Phase 5 (v2.0) | Pending |
+| PREC-FE-03 | Phase 5 (v2.0) | Pending |
 
 **Coverage:**
 - v1 requirements: 14 total — all complete
 - v2 requirements: 8 total
-- Mapped to phases: 0
-- Unmapped: 8
+- Mapped to phases: 8
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-04-02*
-*Last updated: 2026-04-02 — Milestone v2.0*
+*Last updated: 2026-04-02 — Milestone v2.0 roadmap complete*
