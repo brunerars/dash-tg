@@ -5,6 +5,7 @@ from fastapi.security import HTTPBearer
 from config.settings import FRONTEND_ORIGIN
 from routers.analysis import router as analysis_router
 from routers.auth import router as auth_router
+from routers.precompute import router as precompute_router
 
 bearer_scheme = HTTPBearer(auto_error=False)
 
@@ -25,6 +26,7 @@ app.add_middleware(
 
 app.include_router(auth_router)
 app.include_router(analysis_router, tags=["analysis"])
+app.include_router(precompute_router, tags=["pre-computation"])
 
 
 @app.get("/health", tags=["infra"])
