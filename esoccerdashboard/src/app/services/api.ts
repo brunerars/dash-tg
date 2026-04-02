@@ -15,12 +15,37 @@ export function detectBet(filename: string): string {
 }
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL as string;
-const API_KEY = import.meta.env.VITE_API_KEY as string;
 
-console.log("[API] BASE_URL:", BASE_URL);
-console.log("[API] API_KEY definida:", !!API_KEY);
+async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
+  const res = await fetch(`${BASE_URL}${path}`, {
+    ...init,
+    credentials: "include",
+  });
+  if (res.status === 401) {
+    window.dispatchEvent(new Event("auth:unauthorized"));
+  }
+  return res;
+}
 
-const authHeaders = { "X-API-Key": API_KEY };
+export async function login(username: string, password: string): Promise<void> {
+  const res = await fetch(`${BASE_URL}/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({ username, password }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err?.detail ?? "Credenciais invalidas");
+  }
+}
+
+export async function logout(): Promise<void> {
+  await fetch(`${BASE_URL}/auth/logout`, {
+    method: "POST",
+    credentials: "include",
+  });
+}
 
 export interface Strategy {
   id: string;
@@ -40,7 +65,7 @@ export interface AnalyzeResult {
 }
 
 export async function fetchStrategies(): Promise<Strategy[]> {
-  const res = await fetch(`${BASE_URL}/strategies`, { headers: authHeaders });
+  const res = await apiFetch("/strategies");
   if (!res.ok) throw new Error(`Erro ao buscar estratégias: ${res.status}`);
   const data = await res.json();
   return data.strategies ?? data;
@@ -60,9 +85,8 @@ export async function analyzeFiles(
   if (dateTo) form.append("date_to", dateTo);
   if (horarios && horarios.length > 0) form.append("horarios", horarios.join(","));
 
-  const res = await fetch(`${BASE_URL}/analyze`, {
+  const res = await apiFetch("/analyze", {
     method: "POST",
-    headers: authHeaders,
     body: form,
   });
 
@@ -72,8 +96,6 @@ export async function analyzeFiles(
   }
 
   const data = await res.json();
-  console.log("[API] Resposta completa de /analyze:", JSON.stringify(data, null, 2));
-  console.log("[API] Chaves da resposta:", Object.keys(data));
 
   // A API pode retornar o array de resultados com diferentes nomes de campo.
   // Tenta encontrar o array automaticamente.
@@ -91,10 +113,6 @@ export async function analyzeFiles(
   const fallback = Object.values(data).find((v) => Array.isArray(v) && (v as unknown[]).length > 0) as Record<string, unknown>[] | undefined;
 
   const resultsArray = populatedCandidate ?? fallback ?? anyCandidate ?? [];
-
-  if (resultsArray !== data.results) {
-    console.warn("[API] Campo 'results' não encontrado. Usando array alternativo:", resultsArray);
-  }
 
   return {
     cache_key: data.cache_key ?? "",
@@ -128,9 +146,7 @@ export function exportFilteredResults(
 }
 
 export async function exportResults(cacheKey: string): Promise<void> {
-  const res = await fetch(`${BASE_URL}/export/${cacheKey}`, {
-    headers: authHeaders,
-  });
+  const res = await apiFetch(`/export/${cacheKey}`);
   if (!res.ok) throw new Error(`Erro ao exportar: ${res.status}`);
 
   const blob = await res.blob();
@@ -149,9 +165,7 @@ export async function fetchBlueprint(
 ): Promise<{ dupla: string; linha: string | null; total_jogos: number; jogos: Record<string, unknown>[] }> {
   const params = new URLSearchParams({ dupla });
   if (linha) params.set("linha", linha);
-  const res = await fetch(`${BASE_URL}/blueprint/${cacheKey}?${params}`, {
-    headers: authHeaders,
-  });
+  const res = await apiFetch(`/blueprint/${cacheKey}?${params}`);
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error(err?.detail ?? `Erro ao buscar blueprint: ${res.status}`);
@@ -191,10 +205,6 @@ function cleanDupla(raw: unknown): string {
 
 // Normaliza um item da resposta da API para o formato de ResultRow.
 export function normalizeResult(item: Record<string, unknown>, index: number) {
-  if (index === 0) {
-    console.log("[API] Estrutura do primeiro resultado:", item);
-  }
-
   return {
     id: index + 1,
     dupla: cleanDupla(item.dupla ?? item.pair ?? item.jogadores ?? item.players ?? item.confronto ?? item.nome ?? ""),
