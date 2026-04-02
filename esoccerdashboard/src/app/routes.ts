@@ -6,23 +6,29 @@ import { OverUnderPage } from "./components/OverUnderPage";
 import { BlueprintPage } from "./components/BlueprintPage";
 import { LoginPage } from "./components/LoginPage";
 import { ProtectedRoute } from "./components/ProtectedRoute";
+import { AuthLayout } from "./components/AuthLayout";
 
 export const router = createBrowserRouter([
   {
-    path: "/login",
-    Component: LoginPage,
-  },
-  {
-    path: "/",
-    Component: ProtectedRoute,
+    Component: AuthLayout,
     children: [
       {
-        Component: Layout,
+        path: "/login",
+        Component: LoginPage,
+      },
+      {
+        path: "/",
+        Component: ProtectedRoute,
         children: [
-          { index: true, Component: HomePage },
-          { path: "dale", Component: DalePage },
-          { path: "over-under", Component: OverUnderPage },
-          { path: "blueprint/:cacheKey", Component: BlueprintPage },
+          {
+            Component: Layout,
+            children: [
+              { index: true, Component: HomePage },
+              { path: "dale", Component: DalePage },
+              { path: "over-under", Component: OverUnderPage },
+              { path: "blueprint/:cacheKey", Component: BlueprintPage },
+            ],
+          },
         ],
       },
     ],

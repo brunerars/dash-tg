@@ -1,15 +1,19 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Response
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel
 
-from middleware.auth import create_access_token, verify_password
+from middleware.auth import create_access_token, verify_jwt_cookie, verify_password
 from config.settings import (
     APP_USERNAME,
     APP_PASSWORD_HASH,
     JWT_EXPIRE_MINUTES,
     SECURE_COOKIES,
 )
+
+AuthDep = Annotated[str, Depends(verify_jwt_cookie)]
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -37,6 +41,11 @@ def login(body: LoginRequest, response: Response) -> dict:
         max_age=JWT_EXPIRE_MINUTES * 60,
     )
     return {"access_token": token, "token_type": "bearer"}
+
+
+@router.get("/me")
+def me(username: AuthDep) -> dict:
+    return {"username": username}
 
 
 @router.post("/logout")
