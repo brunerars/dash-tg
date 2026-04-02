@@ -23,7 +23,7 @@ O usuario sobe as planilhas e ja encontra todos os resultados computados — sem
 - ✓ 17 metricas calculadas por grupo (SRPT, sistema red, etc.) — existing
 - ✓ Export .xlsx por cache_key — existing
 - ✓ Blueprint endpoint para dados brutos — existing
-- ✓ Autenticacao por API Key (X-API-Key header) — existing
+- ✓ Autenticacao por JWT (login/senha, HttpOnly cookie) — replaced API Key in Phase 2
 - ✓ Filtros opcionais: data, horario — existing
 - ✓ Filtro por nome de planilha (fontes) — existing
 - ✓ Docker Compose (api + redis) — existing
@@ -32,7 +32,7 @@ O usuario sobe as planilhas e ja encontra todos os resultados computados — sem
 
 - [ ] Pre-computacao assincrona de todas as combinacoes de planilhas para Over/Under
 - [x] Remover filtros min_jogos e min_green_pct do backend — Validated in Phase 1: Backend Filter Removal
-- [ ] Autenticacao por login/senha (usuario unico)
+- [x] Autenticacao por login/senha (usuario unico) — Validated in Phase 2: JWT Authentication
 
 ### Out of Scope
 
@@ -64,7 +64,7 @@ O usuario sobe as planilhas e ja encontra todos os resultados computados — sem
 |----------|-----------|---------|
 | Pre-computacao apenas para Over/Under | DALE nao tem problema de performance | — Pending |
 | Filtros min_jogos/min_green_pct saem do backend | Controle deve ser do usuario no frontend | ✓ Phase 1 |
-| Auth por login unico (sem multi-user) | Cliente unico, simplicidade | — Pending |
+| Auth por login unico (sem multi-user) | Cliente unico, simplicidade | ✓ Phase 2 |
 | Manter Redis como unico store | Evitar complexidade de banco adicional | — Pending |
 
 ## Evolution
@@ -85,4 +85,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-04-02 after Phase 1 completion*
+*Last updated: 2026-04-02 after Phase 2 completion*
