@@ -57,7 +57,11 @@ Plans:
   3. After all jobs complete, calling GET /analyze with the same file combination returns a cache hit — computation is not repeated
   4. The main API remains responsive during background computation (pipeline runs in thread pool, not on the event loop)
   5. Jobs stored in Redis expire via TTL — stale "in progress" entries do not accumulate after a worker crash
-**Plans**: TBD
+**Plans**: 2 plans
+
+Plans:
+- [ ] 03-01-PLAN.md — Extract sync pipeline + add Redis job state infrastructure
+- [ ] 03-02-PLAN.md — Create precompute router (POST /precompute, GET /jobs) + wire into app
 
 ## Progress
 
@@ -68,4 +72,4 @@ Phases execute in numeric order: 1 → 2 → 3
 |-------|----------------|--------|-----------|
 | 1. Backend Filter Removal | 0/1 | Not started | - |
 | 2. JWT Authentication | 1/2 | In Progress|  |
-| 3. Async Pre-computation | 0/? | Not started | - |
+| 3. Async Pre-computation | 0/2 | Not started | - |
