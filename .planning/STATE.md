@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: executing
-stopped_at: Completed 03-async-pre-computation/03-01-PLAN.md
-last_updated: "2026-04-02T17:54:14.746Z"
+status: verifying
+stopped_at: Completed 03-async-pre-computation/03-02-PLAN.md
+last_updated: "2026-04-02T18:00:08.137Z"
 last_activity: 2026-04-02
 progress:
   total_phases: 3
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 5
-  completed_plans: 4
+  completed_plans: 5
   percent: 0
 ---
 
@@ -27,7 +27,7 @@ See: .planning/PROJECT.md (updated 2026-04-02)
 
 Phase: 03 (async-pre-computation) — EXECUTING
 Plan: 2 of 2
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-04-02
 
 Progress: [░░░░░░░░░░] 0%
@@ -55,6 +55,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 02-jwt-authentication P01 | 2 | 2 tasks | 4 files |
 | Phase 02-jwt-authentication P02 | 2 | 2 tasks | 3 files |
 | Phase 03-async-pre-computation P01 | 15 | 1 tasks | 3 files |
+| Phase 03-async-pre-computation P02 | 3 | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -70,6 +71,9 @@ Recent decisions affecting current work:
 - [Phase 02-jwt-authentication]: CORS locked to FRONTEND_ORIGIN with allow_credentials=True — wildcard CORS removed entirely
 - [Phase 03-async-pre-computation]: _build_analysis_result is NOT async — enables direct ThreadPoolExecutor call in Plan 02 without event loop bridging
 - [Phase 03-async-pre-computation]: store_job always uses setex — TTL set at creation so crashed workers don't leave stale running jobs in Redis
+- [Phase 03-async-pre-computation]: get_or_compute wraps _build_analysis_result in _dispatch_job so results land in Redis under analysis:{cache_key} enabling cache_hit=true on /analyze
+- [Phase 03-async-pre-computation]: PRECOMPUTE_STRATEGY sourced via next() from ESTRATEGIAS dict at import time — never a hardcoded string
+- [Phase 03-async-pre-computation]: _background_tasks module-level set + done_callback prevents Python GC from killing asyncio Tasks mid-execution
 
 ### Pending Todos
 
@@ -83,6 +87,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-02T17:54:14.741Z
-Stopped at: Completed 03-async-pre-computation/03-01-PLAN.md
+Last session: 2026-04-02T18:00:08.134Z
+Stopped at: Completed 03-async-pre-computation/03-02-PLAN.md
 Resume file: None

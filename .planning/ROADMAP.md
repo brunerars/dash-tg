@@ -14,7 +14,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 - [ ] **Phase 1: Backend Filter Removal** - Remove min_jogos and min_green_pct from API response pipeline; frontend takes ownership of filtering
 - [ ] **Phase 2: JWT Authentication** - Replace X-API-Key header with single-user login/password JWT auth via HttpOnly cookie
-- [ ] **Phase 3: Async Pre-computation** - Non-blocking upload that auto-enqueues all 2^N-1 Over/HT combinations in background; polling endpoint for job status
+- [x] **Phase 3: Async Pre-computation** - Non-blocking upload that auto-enqueues all 2^N-1 Over/HT combinations in background; polling endpoint for job status (completed 2026-04-02)
 
 ## Phase Details
 
@@ -61,7 +61,7 @@ Plans:
 
 Plans:
 - [x] 03-01-PLAN.md — Extract sync pipeline + add Redis job state infrastructure
-- [ ] 03-02-PLAN.md — Create precompute router (POST /precompute, GET /jobs) + wire into app
+- [x] 03-02-PLAN.md — Create precompute router (POST /precompute, GET /jobs) + wire into app
 
 ## Progress
 
@@ -72,4 +72,4 @@ Phases execute in numeric order: 1 → 2 → 3
 |-------|----------------|--------|-----------|
 | 1. Backend Filter Removal | 0/1 | Not started | - |
 | 2. JWT Authentication | 1/2 | In Progress|  |
-| 3. Async Pre-computation | 0/2 | Not started | - |
+| 3. Async Pre-computation | 2/2 | Complete   | 2026-04-02 |

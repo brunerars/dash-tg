@@ -21,10 +21,10 @@
 
 ### Pre-computacao
 
-- [ ] **PREC-01**: Upload de N planilhas dispara automaticamente todas as 2^N-1 combinacoes para Over/Under
-- [ ] **PREC-02**: Endpoint retorna 202 Accepted com job IDs imediatamente
+- [x] **PREC-01**: Upload de N planilhas dispara automaticamente todas as 2^N-1 combinacoes para Over/Under
+- [x] **PREC-02**: Endpoint retorna 202 Accepted com job IDs imediatamente
 - [x] **PREC-03**: Resultados de cada combinacao salvos no Redis conforme ficam prontos
-- [ ] **PREC-04**: GET /jobs/{job_id} retorna status (pending/running/completed/failed) + cache_key
+- [x] **PREC-04**: GET /jobs/{job_id} retorna status (pending/running/completed/failed) + cache_key
 - [x] **PREC-05**: Pipeline roda em thread/process pool sem bloquear o event loop
 - [x] **PREC-06**: Jobs expiram do Redis com TTL
 
@@ -60,10 +60,10 @@
 | AUTH-03 | Phase 2 | Complete |
 | AUTH-04 | Phase 2 | Complete |
 | AUTH-05 | Phase 2 | Complete |
-| PREC-01 | Phase 3 | Pending |
-| PREC-02 | Phase 3 | Pending |
+| PREC-01 | Phase 3 | Complete |
+| PREC-02 | Phase 3 | Complete |
 | PREC-03 | Phase 3 | Complete |
-| PREC-04 | Phase 3 | Pending |
+| PREC-04 | Phase 3 | Complete |
 | PREC-05 | Phase 3 | Complete |
 | PREC-06 | Phase 3 | Complete |
 
