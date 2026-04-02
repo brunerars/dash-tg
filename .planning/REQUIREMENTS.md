@@ -33,13 +33,13 @@
 ### Auth Frontend
 
 - [ ] **AUTH-FE-01**: Usuario pode fazer login com username + senha via pagina de login que chama POST /auth/login
-- [ ] **AUTH-FE-02**: Qualquer resposta 401 da API redireciona o usuario para /login
+- [x] **AUTH-FE-02**: Qualquer resposta 401 da API redireciona o usuario para /login
 - [ ] **AUTH-FE-03**: Usuario pode fazer logout via botao no layout que chama POST /auth/logout e redireciona para /login
 
 ### API Migration
 
-- [ ] **API-MIG-01**: Todas as chamadas fetch usam credentials: "include" em vez de header X-API-Key
-- [ ] **API-MIG-02**: VITE_API_KEY removido de env vars, Dockerfile build args, e vite-env.d.ts
+- [x] **API-MIG-01**: Todas as chamadas fetch usam credentials: "include" em vez de header X-API-Key
+- [x] **API-MIG-02**: VITE_API_KEY removido de env vars, Dockerfile build args, e vite-env.d.ts
 
 ### Pre-compute Frontend
 
@@ -91,10 +91,10 @@
 | PREC-05 | Phase 3 (v1.0) | Complete |
 | PREC-06 | Phase 3 (v1.0) | Complete |
 | AUTH-FE-01 | Phase 4 (v2.0) | Pending |
-| AUTH-FE-02 | Phase 4 (v2.0) | Pending |
+| AUTH-FE-02 | Phase 4 (v2.0) | Complete |
 | AUTH-FE-03 | Phase 4 (v2.0) | Pending |
-| API-MIG-01 | Phase 4 (v2.0) | Pending |
-| API-MIG-02 | Phase 4 (v2.0) | Pending |
+| API-MIG-01 | Phase 4 (v2.0) | Complete |
+| API-MIG-02 | Phase 4 (v2.0) | Complete |
 | PREC-FE-01 | Phase 5 (v2.0) | Pending |
 | PREC-FE-02 | Phase 5 (v2.0) | Pending |
 | PREC-FE-03 | Phase 5 (v2.0) | Pending |

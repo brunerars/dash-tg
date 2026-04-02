@@ -75,7 +75,7 @@ Plans:
 **UI hint**: yes
 
 Plans:
-- [ ] 04-01-PLAN.md — Vite dev proxy + api.ts cookie migration + AuthContext + ProtectedRoute
+- [x] 04-01-PLAN.md — Vite dev proxy + api.ts cookie migration + AuthContext + ProtectedRoute
 - [ ] 04-02-PLAN.md — LoginPage + routes wiring + App.tsx AuthProvider + Layout logout button
 
 #### Phase 5: Pre-compute Polling
@@ -99,5 +99,5 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 | 1. Backend Filter Removal | v1.0 | 1/1 | Complete | 2026-04-02 |
 | 2. JWT Authentication | v1.0 | 2/2 | Complete | 2026-04-02 |
 | 3. Async Pre-computation | v1.0 | 2/2 | Complete | 2026-04-02 |
-| 4. Auth Chain + API Migration | v2.0 | 0/2 | Not started | - |
+| 4. Auth Chain + API Migration | v2.0 | 1/2 | In Progress|  |
 | 5. Pre-compute Polling | v2.0 | 0/TBD | Not started | - |
