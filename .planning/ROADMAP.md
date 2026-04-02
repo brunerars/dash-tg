@@ -26,7 +26,10 @@ Decimal phases appear between their surrounding integers in numeric order.
   1. A response from /analyze contains rows regardless of how low their quantidade_entradas or percentual_green values are
   2. The response shape is unchanged (same fields, same structure) — only filter lines are gone
   3. All existing analysis: and export: Redis keys are flushed at deploy so no stale filtered results are served on cache hit
-**Plans**: TBD
+**Plans**: 1 plan
+
+Plans:
+- [ ] 01-01-PLAN.md — Remove display filters from pipeline + deploy-time Redis cache flush
 
 ### Phase 2: JWT Authentication
 **Goal**: Users authenticate with username + password and receive a JWT; all protected endpoints validate the token instead of the API Key header
@@ -59,6 +62,6 @@ Phases execute in numeric order: 1 → 2 → 3
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Backend Filter Removal | 0/? | Not started | - |
+| 1. Backend Filter Removal | 0/1 | Not started | - |
 | 2. JWT Authentication | 0/? | Not started | - |
 | 3. Async Pre-computation | 0/? | Not started | - |
