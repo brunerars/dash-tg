@@ -71,8 +71,12 @@ Plans:
   3. Clicking logout clears the session, redirects to /login, and a subsequent back-navigation does not restore the dashboard
   4. Any mid-session 401 (expired token) redirects to /login automatically without a blank error screen
   5. No request to the backend carries an X-API-Key header — VITE_API_KEY is absent from all env files and build config
-**Plans**: TBD
+**Plans**: 2 plans
 **UI hint**: yes
+
+Plans:
+- [ ] 04-01-PLAN.md — Vite dev proxy + api.ts cookie migration + AuthContext + ProtectedRoute
+- [ ] 04-02-PLAN.md — LoginPage + routes wiring + App.tsx AuthProvider + Layout logout button
 
 #### Phase 5: Pre-compute Polling
 **Goal**: Uploading files on the Over/Under page automatically triggers pre-computation and the UI shows live progress until all combinations are ready
@@ -95,5 +99,5 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 | 1. Backend Filter Removal | v1.0 | 1/1 | Complete | 2026-04-02 |
 | 2. JWT Authentication | v1.0 | 2/2 | Complete | 2026-04-02 |
 | 3. Async Pre-computation | v1.0 | 2/2 | Complete | 2026-04-02 |
-| 4. Auth Chain + API Migration | v2.0 | 0/TBD | Not started | - |
+| 4. Auth Chain + API Migration | v2.0 | 0/2 | Not started | - |
 | 5. Pre-compute Polling | v2.0 | 0/TBD | Not started | - |
