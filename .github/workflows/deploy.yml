@@ -74,7 +74,6 @@ jobs:
           push: true
           build-args: |
             VITE_API_BASE_URL=https://api-tg-esoccer.arvsystems.cloud
-            VITE_API_KEY=${{ secrets.VITE_API_KEY }}
           tags: |
             ${{ env.IMAGE_FRONTEND }}:${{ steps.meta.outputs.short_sha }}
             ${{ env.IMAGE_FRONTEND }}:latest

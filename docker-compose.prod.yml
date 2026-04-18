@@ -4,10 +4,15 @@ services:
   api:
     image: ${IMAGE_API}:latest
     environment:
-      - API_KEYS=${API_KEYS}
       - REDIS_URL=redis://redis:6379
       - CACHE_TTL_ANALYSIS=${CACHE_TTL_ANALYSIS:-86400}
       - CACHE_TTL_EXPORT=${CACHE_TTL_EXPORT:-3600}
+      - CACHE_TTL_JOB=${CACHE_TTL_JOB:-7200}
+      - PRECOMPUTE_WORKERS=${PRECOMPUTE_WORKERS:-2}
+      - JWT_SECRET=${JWT_SECRET}
+      - JWT_EXPIRE_MINUTES=${JWT_EXPIRE_MINUTES:-720}
+      - FRONTEND_ORIGIN=https://dash-tg.arvsystems.cloud
+      - SECURE_COOKIES=true
     networks:
       - network_public
     volumes:
