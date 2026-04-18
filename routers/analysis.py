@@ -15,6 +15,7 @@ from config.strategies import ESTRATEGIAS, get_strategy_internal
 from esoccer_dashboard.services.cache import (
     delete_cache_key,
     gerar_cache_key,
+    get_analysis,
     get_file_df,
     store_file_df,
     get_blueprint,
@@ -185,6 +186,25 @@ async def _analyze_with_strategy(
 
     result, cache_hit = get_or_compute(cache_key, compute)
     result["cache_hit"] = cache_hit
+    return result
+
+
+# ---------------------------------------------------------------------------
+# GET /results/{cache_key}  (fetch pre-computed result without re-uploading files)
+# ---------------------------------------------------------------------------
+@router.get(
+    "/results/{cache_key}",
+    tags=["análise"],
+    summary="Buscar resultado pre-computado pelo cache_key",
+)
+def get_cached_result(_key: AuthDep, cache_key: str) -> dict:
+    """Retorna um resultado de análise já computado (cache hit instantâneo).
+    Usado quando o frontend troca a seleção de planilhas e a combinação
+    já foi pre-computada em background."""
+    result = get_analysis(cache_key)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Resultado nao encontrado ou expirado.")
+    result["cache_hit"] = True
     return result
 
 

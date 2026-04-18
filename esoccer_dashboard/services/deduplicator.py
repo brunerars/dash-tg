@@ -20,11 +20,13 @@ def deduplicate_clusters(
     window_minutes: int = 5,
 ) -> DedupResult:
     """
-    Deduplicação por cluster (≤ window_minutes) seguindo o CLAUDE.md:
-    - agrupa por dedup_key (ex: ["DuplaNormalizada", "Data"])
-    - diferença de horário ≤ janela entre linhas de arquivos diferentes
-    - manter apenas a linha com horário mais tardio dentro do cluster
-      quando houver múltiplos arquivos
+    Deduplicação por cluster (≤ window_minutes) — versão vetorizada.
+
+    Algoritmo:
+    1. Ordena por dedup_key + DataHora
+    2. Identifica grupos (dedup_key) e clusters (gaps > window) via operações C
+    3. Para clusters com múltiplos arquivos: mantém a linha com horário mais tardio
+    4. Para clusters com um único arquivo: mantém todas as linhas
 
     O dedup_key é definido pela estratégia — nunca hardcoded aqui.
     """
@@ -37,21 +39,34 @@ def deduplicate_clusters(
         return DedupResult(df=df.copy(), total_jogos_apos_dedup=0)
 
     td = pd.Timedelta(minutes=window_minutes)
-    keep_indices: list[int] = []
 
-    df_sorted = df.sort_values("DataHora")
-    grouped = df_sorted.groupby(dedup_key, sort=False)
-    for _, g in grouped:
-        g = g.sort_values("DataHora")
-        diffs = g["DataHora"].diff()
-        cluster_id = (diffs.isna() | (diffs > td)).cumsum()
+    # 1. Sort by dedup_key + DataHora (one C-level sort)
+    dfs = df.sort_values(dedup_key + ["DataHora"]).copy()
 
-        for _, cg in g.groupby(cluster_id, sort=False):
-            sources = cg["__source_file"].nunique(dropna=False)
-            if sources >= 2:
-                keep_indices.append(int(cg["DataHora"].idxmax()))
-            else:
-                keep_indices.extend(cg.index.tolist())
+    # 2. Identify group boundaries using ngroup (C-level groupby)
+    grp_id = dfs.groupby(dedup_key, sort=False).ngroup()
+    grp_changed = grp_id != grp_id.shift(1)
 
-    out = df.loc[keep_indices].sort_values([dedup_key[0], "DataHora"], kind="stable").reset_index(drop=True)
+    # 3. Identify cluster boundaries: new group OR time gap > window
+    time_diff = dfs["DataHora"].diff()
+    new_cluster = grp_changed | (time_diff > td) | time_diff.isna()
+    cluster_id = new_cluster.cumsum()
+
+    # 4. Vectorized aggregation: count unique sources and find latest per cluster
+    dfs["_cluster"] = cluster_id.values
+    cluster_info = dfs.groupby("_cluster").agg(
+        n_sources=("__source_file", "nunique"),
+        latest_idx=("DataHora", "idxmax"),
+    )
+
+    # 5. Single-source clusters: keep all rows. Multi-source: keep only latest.
+    single_source_clusters = cluster_info.index[cluster_info["n_sources"] < 2]
+    multi_source_latest = cluster_info.loc[cluster_info["n_sources"] >= 2, "latest_idx"]
+
+    mask_single = dfs["_cluster"].isin(single_source_clusters)
+    keep_idx = dfs.index[mask_single].append(pd.Index(multi_source_latest.values))
+
+    out = df.loc[keep_idx].sort_values(
+        [dedup_key[0], "DataHora"], kind="stable",
+    ).reset_index(drop=True)
     return DedupResult(df=out, total_jogos_apos_dedup=int(len(out)))

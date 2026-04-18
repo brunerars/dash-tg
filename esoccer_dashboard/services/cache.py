@@ -53,6 +53,13 @@ def get_or_compute(
     return result, False
 
 
+def get_analysis(cache_key: str) -> dict | None:
+    """Retrieve a cached analysis result by cache_key. Returns None if not found."""
+    r = get_redis_client()
+    raw = r.get(f"analysis:{cache_key}")
+    return json.loads(raw) if raw else None
+
+
 def store_export(cache_key: str, xlsx_bytes: bytes) -> None:
     r = get_redis_client()
     encoded = base64.b64encode(xlsx_bytes).decode("ascii")
@@ -102,11 +109,14 @@ def store_job(
     status: str,
     cache_key: str | None = None,
     error: str | None = None,
+    filenames: list[str] | None = None,
     ttl: int = CACHE_TTL_JOB,
 ) -> None:
     """Store or update a pre-computation job record. TTL set at creation (PREC-06)."""
     r = get_redis_client()
-    payload = {"job_id": job_id, "status": status, "cache_key": cache_key, "error": error}
+    payload: dict = {"job_id": job_id, "status": status, "cache_key": cache_key, "error": error}
+    if filenames is not None:
+        payload["filenames"] = filenames
     r.setex(f"job:{job_id}", ttl, json.dumps(payload))
 
 

@@ -5,6 +5,7 @@ python-dotenv
 python-multipart
 pandas
 openpyxl
+python-calamine
 python-dateutil
 numpy
 pydantic

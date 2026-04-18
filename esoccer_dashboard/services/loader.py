@@ -102,7 +102,7 @@ def load_tips_enviadas(files: Iterable[UploadedLike]) -> LoadResult:
         bio = BytesIO(content)
 
         try:
-            df = pd.read_excel(bio, sheet_name=SHEET_NAME, engine="openpyxl")
+            df = pd.read_excel(bio, sheet_name=SHEET_NAME, engine="calamine")
         except ValueError as e:
             raise ValueError(f"Arquivo '{source_name}' não tem a aba '{SHEET_NAME}'.") from e
 

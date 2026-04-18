@@ -111,6 +111,8 @@ function LigaBadge({ value }: { value: string }) {
   );
 }
 
+const PAGE_SIZE = 100;
+
 export function ResultsTable({ data, columns, allColumns, columnConfig, onColumnConfigChange, emptyMessage = "Nenhum resultado encontrado", cacheKey }: ResultsTableProps) {
   const [sortKey, setSortKey] = useState<string>("porcentagem");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
@@ -118,11 +120,13 @@ export function ResultsTable({ data, columns, allColumns, columnConfig, onColumn
   const [canScrollRight, setCanScrollRight] = useState(false);
   const [scrollProgress, setScrollProgress] = useState(0);
   const [showColumnConfig, setShowColumnConfig] = useState(false);
+  const [page, setPage] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
   const { theme } = useTheme();
   const isDark = theme === "dark";
 
   const sorted = useMemo(() => {
+    setPage(0); // Reset to first page on data/sort change
     return [...data].sort((a, b) => {
       const aVal = a[sortKey];
       const bVal = b[sortKey];
@@ -134,6 +138,9 @@ export function ResultsTable({ data, columns, allColumns, columnConfig, onColumn
         : String(bVal).localeCompare(String(aVal));
     });
   }, [data, sortKey, sortDir]);
+
+  const totalPages = Math.ceil(sorted.length / PAGE_SIZE);
+  const pageRows = sorted.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
 
   const checkScroll = useCallback(() => {
     const el = scrollRef.current;
@@ -379,7 +386,7 @@ export function ResultsTable({ data, columns, allColumns, columnConfig, onColumn
               </tr>
             </thead>
             <tbody>
-              {sorted.map((row, i) => (
+              {pageRows.map((row, i) => (
                 <tr
                   key={row.id}
                   className={`border-b border-border/50 transition-colors hover:bg-secondary/30 ${i % 2 === 0 ? "" : "bg-secondary/10"
@@ -407,6 +414,48 @@ export function ResultsTable({ data, columns, allColumns, columnConfig, onColumn
           </table>
         </div>
       </div>
+
+      {/* Pagination */}
+      {totalPages > 1 && (
+        <div className="px-4 py-3 border-t border-border flex items-center justify-between">
+          <span className="text-muted-foreground" style={{ fontSize: "0.8rem" }}>
+            {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, sorted.length)} de {sorted.length.toLocaleString()}
+          </span>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => setPage(0)}
+              disabled={page === 0}
+              className="px-2 py-1 rounded text-sm transition-colors disabled:opacity-30 hover:bg-secondary/50"
+            >
+              &laquo;
+            </button>
+            <button
+              onClick={() => setPage(page - 1)}
+              disabled={page === 0}
+              className="px-2 py-1 rounded text-sm transition-colors disabled:opacity-30 hover:bg-secondary/50"
+            >
+              &lsaquo;
+            </button>
+            <span className="px-3 py-1 text-sm tabular-nums text-foreground">
+              {page + 1} / {totalPages}
+            </span>
+            <button
+              onClick={() => setPage(page + 1)}
+              disabled={page >= totalPages - 1}
+              className="px-2 py-1 rounded text-sm transition-colors disabled:opacity-30 hover:bg-secondary/50"
+            >
+              &rsaquo;
+            </button>
+            <button
+              onClick={() => setPage(totalPages - 1)}
+              disabled={page >= totalPages - 1}
+              className="px-2 py-1 rounded text-sm transition-colors disabled:opacity-30 hover:bg-secondary/50"
+            >
+              &raquo;
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

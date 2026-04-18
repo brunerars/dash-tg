@@ -15,6 +15,8 @@ CACHE_TTL_JOB: int = int(os.getenv("CACHE_TTL_JOB", "7200"))
 
 DATA_DIR: str = os.getenv("DATA_DIR", "/app/data")
 
+PRECOMPUTE_WORKERS: int = int(os.getenv("PRECOMPUTE_WORKERS", "2"))
+
 # --- JWT Auth (Phase 2) ---
 JWT_SECRET: str = os.getenv("JWT_SECRET", "")
 ALGORITHM: str = "HS256"

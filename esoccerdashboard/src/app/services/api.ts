@@ -64,6 +64,12 @@ export interface AnalyzeResult {
   horarios_unicos?: string[];
 }
 
+export async function fetchMe(): Promise<{ username: string }> {
+  const res = await apiFetch("/auth/me");
+  if (!res.ok) throw new Error(`Erro ao verificar sessão: ${res.status}`);
+  return res.json();
+}
+
 export async function fetchStrategies(): Promise<Strategy[]> {
   const res = await apiFetch("/strategies");
   if (!res.ok) throw new Error(`Erro ao buscar estratégias: ${res.status}`);
@@ -158,6 +164,29 @@ export async function exportResults(cacheKey: string): Promise<void> {
   URL.revokeObjectURL(url);
 }
 
+export async function fetchCachedResult(cacheKey: string): Promise<AnalyzeResult> {
+  const res = await apiFetch(`/results/${cacheKey}`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err?.detail ?? `Erro ao buscar resultado: ${res.status}`);
+  }
+  const data = await res.json();
+  const candidates = [data.results, data.duplas, data.data, data.resultados, data.pairs, Array.isArray(data) ? data : null];
+  const resultsArray = candidates.find((c) => Array.isArray(c) && c.length > 0)
+    ?? (Object.values(data).find((v) => Array.isArray(v) && (v as unknown[]).length > 0) as Record<string, unknown>[] | undefined)
+    ?? candidates.find((c) => Array.isArray(c))
+    ?? [];
+  return {
+    cache_key: data.cache_key ?? cacheKey,
+    cache_hit: true,
+    strategy: data.strategy ?? "",
+    total_jogos_brutos: data.total_jogos_brutos ?? 0,
+    total_jogos_apos_dedup: data.total_jogos_apos_dedup ?? 0,
+    results: resultsArray,
+    horarios_unicos: data.horarios_unicos ?? undefined,
+  };
+}
+
 export async function fetchBlueprint(
   cacheKey: string,
   dupla: string,
@@ -169,6 +198,59 @@ export async function fetchBlueprint(
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error(err?.detail ?? `Erro ao buscar blueprint: ${res.status}`);
+  }
+  return res.json();
+}
+
+// ---------------------------------------------------------------------------
+// Pre-computation
+// ---------------------------------------------------------------------------
+
+export interface ComboInfo {
+  job_id: string;
+  filenames: string[];
+}
+
+export interface PrecomputeResult {
+  job_ids: string[];
+  primary_job_id: string;
+  total_jobs: number;
+  strategy: string;
+  combos: ComboInfo[];
+}
+
+export interface JobStatus {
+  job_id: string;
+  status: "pending" | "running" | "completed" | "failed" | "expired";
+  cache_key?: string;
+  error?: string;
+}
+
+export interface BulkJobStatus {
+  jobs: JobStatus[];
+  total: number;
+  completed: number;
+  failed: number;
+  all_done: boolean;
+}
+
+export async function precompute(files: File[], strategy: string): Promise<PrecomputeResult> {
+  const form = new FormData();
+  files.forEach((f) => form.append("files", f));
+  form.append("strategy", strategy);
+  const res = await apiFetch("/precompute", { method: "POST", body: form });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err?.detail ?? `Erro no precompute: ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function fetchJobsStatus(jobIds: string[]): Promise<BulkJobStatus> {
+  const res = await apiFetch(`/jobs/status?ids=${jobIds.join(",")}`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err?.detail ?? `Erro ao buscar status: ${res.status}`);
   }
   return res.json();
 }

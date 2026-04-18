@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useEffect, useCallback } from "react";
-import { fetchStrategies, login as apiLogin, logout as apiLogout } from "../services/api";
+import { fetchMe, login as apiLogin, logout as apiLogout } from "../services/api";
 
 interface AuthContextValue {
   isAuthenticated: boolean;
@@ -20,9 +20,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    // Probe session: GET /strategies is auth-protected, no side effects
-    // TODO: replace with GET /auth/me when backend adds it
-    fetchStrategies()
+    fetchMe()
       .then(() => setIsAuthenticated(true))
       .catch(() => setIsAuthenticated(false))
       .finally(() => setIsLoading(false));

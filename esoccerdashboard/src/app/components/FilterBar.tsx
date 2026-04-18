@@ -264,7 +264,7 @@ export function FilterBar({
           <span style={labelStyle}>Min.Part</span>
           <input
             type="number"
-            min={1}
+            min={0}
             max={100}
             value={minMatches}
             onChange={(e) => onMinMatchesChange(Number(e.target.value))}
