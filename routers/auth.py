@@ -7,8 +7,7 @@ from pydantic import BaseModel
 
 from middleware.auth import create_access_token, verify_jwt_cookie, verify_password
 from config.settings import (
-    APP_USERNAME,
-    APP_PASSWORD_HASH,
+    APP_USERS,
     JWT_EXPIRE_MINUTES,
     SECURE_COOKIES,
 )
@@ -25,11 +24,13 @@ class LoginRequest(BaseModel):
 
 @router.post("/login")
 def login(body: LoginRequest, response: Response) -> dict:
-    if body.username != APP_USERNAME:
-        # Always run verify to prevent timing side-channel
-        verify_password(body.password, APP_PASSWORD_HASH)
+    stored_hash = APP_USERS.get(body.username)
+    if stored_hash is None:
+        # Run verify against a dummy hash to prevent timing side-channel
+        dummy = list(APP_USERS.values())[0] if APP_USERS else "$argon2id$v=19$m=65536,t=3,p=4$x$x"
+        verify_password(body.password, dummy)
         raise HTTPException(status_code=401, detail="Credenciais inválidas")
-    if not verify_password(body.password, APP_PASSWORD_HASH):
+    if not verify_password(body.password, stored_hash):
         raise HTTPException(status_code=401, detail="Credenciais inválidas")
     token = create_access_token({"sub": body.username})
     response.set_cookie(

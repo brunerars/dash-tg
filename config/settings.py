@@ -21,8 +21,23 @@ PRECOMPUTE_WORKERS: int = int(os.getenv("PRECOMPUTE_WORKERS", "2"))
 JWT_SECRET: str = os.getenv("JWT_SECRET", "")
 ALGORITHM: str = "HS256"
 JWT_EXPIRE_MINUTES: int = int(os.getenv("JWT_EXPIRE_MINUTES", "720"))
-APP_USERNAME: str = os.getenv("APP_USERNAME", "admin")
-APP_PASSWORD_HASH: str = os.getenv("APP_PASSWORD_HASH", "")
+
+# Multi-user auth: APP_USERS="user1:hash1,user2:hash2"
+# Falls back to legacy APP_USERNAME/APP_PASSWORD_HASH if APP_USERS is not set.
+APP_USERS: dict[str, str] = {}
+_raw_users = os.getenv("APP_USERS", "")
+if _raw_users:
+    for entry in _raw_users.split("|||"):
+        entry = entry.strip()
+        if ":" in entry:
+            uname, uhash = entry.split(":", 1)
+            APP_USERS[uname.strip()] = uhash.strip()
+else:
+    # Legacy single-user fallback
+    _legacy_user = os.getenv("APP_USERNAME", "admin")
+    _legacy_hash = os.getenv("APP_PASSWORD_HASH", "")
+    if _legacy_hash:
+        APP_USERS[_legacy_user] = _legacy_hash
 FRONTEND_ORIGIN: str = os.getenv("FRONTEND_ORIGIN", "http://localhost:3000")
 SECURE_COOKIES: bool = os.getenv("SECURE_COOKIES", "true").lower() == "true"
 
