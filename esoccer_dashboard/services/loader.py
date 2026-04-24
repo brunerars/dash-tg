@@ -104,7 +104,19 @@ def load_tips_enviadas(files: Iterable[UploadedLike]) -> LoadResult:
         try:
             df = pd.read_excel(bio, sheet_name=SHEET_NAME, engine="calamine")
         except ValueError as e:
-            raise ValueError(f"Arquivo '{source_name}' não tem a aba '{SHEET_NAME}'.") from e
+            # Tenta listar as abas existentes pra ajudar debug
+            try:
+                bio.seek(0)
+                with pd.ExcelFile(bio, engine="calamine") as xl:
+                    available = list(xl.sheet_names)
+                raise ValueError(
+                    f"Arquivo '{source_name}' nao tem a aba '{SHEET_NAME}'. "
+                    f"Abas disponiveis: {available}"
+                ) from e
+            except ValueError:
+                raise
+            except Exception:
+                raise ValueError(f"Arquivo '{source_name}' nao tem a aba '{SHEET_NAME}'.") from e
 
         df = _normalize_columns(df)
         _ensure_required_columns(df, source_name)
