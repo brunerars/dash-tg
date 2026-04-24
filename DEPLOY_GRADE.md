@@ -17,13 +17,6 @@ Dois A-records apontando pro IP do manager:
 - `dash-tg-grade.arvsystems.cloud`
 - `api-dash-tg-grade.arvsystems.cloud`
 
-### Diretorio de dados na VPS
-```bash
-ssh <vps>
-mkdir -p /opt/dashtg-grade/data
-chmod 755 /opt/dashtg-grade/data
-```
-
 ### Secrets no GitHub Actions
 Ja devem existir (vindos do workflow antigo do dash-tg):
 - `VPS_HOST`, `VPS_USER`, `VPS_SSH_KEY`

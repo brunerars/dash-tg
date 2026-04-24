@@ -37,8 +37,6 @@ services:
     networks:
       - network_public
       - dashtg_grade_internal
-    volumes:
-      - /opt/dashtg-grade/data:/app/data:ro
     healthcheck:
       test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:8000/health', timeout=3.0)"]
       interval: 30s
