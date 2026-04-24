@@ -1,3 +1,4 @@
+import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -14,13 +15,26 @@ from routers.precompute import router as precompute_router
 bearer_scheme = HTTPBearer(auto_error=False)
 
 
+async def _init_db_with_retry(attempts: int = 30, delay: float = 2.0) -> None:
+    """create_tables com retry — em Swarm, Postgres pode demorar a entrar no DNS."""
+    last_err: Exception | None = None
+    for i in range(1, attempts + 1):
+        try:
+            await create_tables()
+            print(f"[STARTUP] Tabelas de grade OK (tentativa {i})")
+            return
+        except Exception as e:
+            last_err = e
+            if i == 1:
+                print(f"[STARTUP] Aguardando DB ({type(e).__name__}: {e})...")
+            await asyncio.sleep(delay)
+    print(f"[STARTUP] ERRO: DB indisponivel apos {attempts * delay:.0f}s. Ultimo erro: {last_err}")
+    print("[STARTUP] API vai subir mesmo assim — endpoints /flags e /grade vao falhar ate DB voltar.")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Cria tabelas do subsistema de grade (idempotente — SQLAlchemy checa antes de criar).
-    try:
-        await create_tables()
-    except Exception as e:
-        print(f"[STARTUP] Aviso: create_tables falhou ({e}). Rode migrations manuais se necessario.")
+    await _init_db_with_retry()
     yield
 
 
