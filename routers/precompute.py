@@ -4,6 +4,7 @@ import asyncio
 import logging
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from datetime import date, timedelta
 from itertools import combinations
 from typing import Annotated
 
@@ -69,6 +70,8 @@ async def _dispatch_job(
     job_id: str,
     strategy_name: str,
     files_contents: list[tuple[str, bytes]],
+    date_from: str | None = None,
+    date_to: str | None = None,
 ) -> None:
     """Updates job to running, executes pipeline in thread pool via get_or_compute,
     updates to completed/failed.
@@ -79,18 +82,19 @@ async def _dispatch_job(
     """
     n_files = len(files_contents)
     file_names = [name for name, _ in files_contents]
-    logger.info("Job %s RUNNING — strategy=%s, files=%d %s", job_id[:8], strategy_name, n_files, file_names)
+    period_label = f", period={date_from}..{date_to}" if date_from else ""
+    logger.info("Job %s RUNNING — strategy=%s, files=%d %s%s", job_id[:8], strategy_name, n_files, file_names, period_label)
     store_job(job_id, status="running", filenames=file_names)
     loop = asyncio.get_running_loop()
     try:
         files_bytes = [content for _, content in files_contents]
-        cache_key = gerar_cache_key(files_bytes, strategy_name)
+        cache_key = gerar_cache_key(files_bytes, strategy_name, date_from, date_to)
 
         _result, _cache_hit = await loop.run_in_executor(
             _executor,
             lambda: get_or_compute(
                 cache_key,
-                lambda: _build_analysis_result(strategy_name, files_contents),
+                lambda: _build_analysis_result(strategy_name, files_contents, date_from, date_to),
             ),
         )
         logger.info("Job %s COMPLETED — cache_key=%s, cache_hit=%s", job_id[:8], cache_key[:12], _cache_hit)
@@ -100,11 +104,21 @@ async def _dispatch_job(
         store_job(job_id, status="failed", error=str(exc), filenames=file_names)
 
 
+PRECOMPUTE_PERIODS = [15, 30, 60, 90]
+
+
+def _period_date_range(days: int) -> tuple[str, str]:
+    """Return (date_from, date_to) for a quick-period preset."""
+    today = date.today()
+    return (today - timedelta(days=days)).isoformat(), today.isoformat()
+
+
 async def _dispatch_remaining_after_primary(
     primary_job_id: str,
     strategy_name: str,
     combos: list[list[tuple[str, bytes]]],
     job_ids: list[str],
+    period_jobs: list[tuple[str, int, list[tuple[str, bytes]]]] | None = None,
 ) -> None:
     """Wait for the primary job to finish, then dispatch remaining combos ONE AT A TIME.
 
@@ -118,8 +132,15 @@ async def _dispatch_remaining_after_primary(
             break
         await asyncio.sleep(2)
 
-    logger.info("Primary done. Dispatching %d remaining combos sequentially.", len(combos))
+    # Dispatch period variants for the full combo first (high value for UX)
+    if period_jobs:
+        logger.info("Primary done. Dispatching %d period variants sequentially.", len(period_jobs))
+        for jid, days, full_combo in period_jobs:
+            dfrom, dto = _period_date_range(days)
+            store_job(jid, status="pending")
+            await _dispatch_job(jid, strategy_name, full_combo, date_from=dfrom, date_to=dto)
 
+    logger.info("Dispatching %d remaining file combos sequentially.", len(combos))
     for jid, combo in zip(job_ids, combos):
         store_job(jid, status="pending")
         await _dispatch_job(jid, strategy_name, combo)
@@ -187,6 +208,18 @@ async def precompute(
     _background_tasks.add(t)
     t.add_done_callback(_background_tasks.discard)
 
+    # Period jobs: full combo × 4 standard periods (15d, 30d, 60d, 90d)
+    period_job_list: list[tuple[str, int, list[tuple[str, bytes]]]] = []
+    period_jobs_response: list[dict] = []
+    for days in PRECOMPUTE_PERIODS:
+        jid = str(uuid.uuid4())
+        period_job_list.append((jid, days, full_combo))
+        period_jobs_response.append({
+            "job_id": jid,
+            "filenames": primary_filenames,
+            "period_days": days,
+        })
+
     # Remaining combos: dispatched sequentially AFTER primary completes
     remaining_jobs: list[dict] = []
     remaining_ids: list[str] = []
@@ -196,16 +229,17 @@ async def precompute(
         remaining_ids.append(jid)
         remaining_jobs.append({"job_id": jid, "filenames": combo_filenames})
 
-    if remaining_ids:
+    if remaining_ids or period_job_list:
         bg_task = asyncio.create_task(
             _dispatch_remaining_after_primary(
                 primary_job_id, strategy, remaining_combos, remaining_ids,
+                period_jobs=period_job_list,
             )
         )
         _background_tasks.add(bg_task)
         bg_task.add_done_callback(_background_tasks.discard)
 
-    all_job_ids = [primary_job_id] + remaining_ids
+    all_job_ids = [primary_job_id] + [p["job_id"] for p in period_jobs_response] + remaining_ids
 
     # Return combo→filenames mapping so frontend can map file selection to cache_key
     combo_map = [{"job_id": primary_job_id, "filenames": primary_filenames}] + remaining_jobs
@@ -216,6 +250,7 @@ async def precompute(
         "total_jobs": len(all_job_ids),
         "strategy": strategy,
         "combos": combo_map,
+        "period_combos": period_jobs_response,
     }
 
 

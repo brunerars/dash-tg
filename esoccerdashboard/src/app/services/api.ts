@@ -211,12 +211,19 @@ export interface ComboInfo {
   filenames: string[];
 }
 
+export interface PeriodComboInfo {
+  job_id: string;
+  filenames: string[];
+  period_days: number;
+}
+
 export interface PrecomputeResult {
   job_ids: string[];
   primary_job_id: string;
   total_jobs: number;
   strategy: string;
   combos: ComboInfo[];
+  period_combos: PeriodComboInfo[];
 }
 
 export interface JobStatus {
