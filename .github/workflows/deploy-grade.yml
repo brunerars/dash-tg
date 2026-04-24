@@ -1,0 +1,119 @@
+name: CI/CD — Build Images (feat/grade stack)
+
+on:
+  push:
+    branches: [feat/grade]
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_API_GRADE: ghcr.io/${{ github.repository }}/api-grade
+  IMAGE_FRONTEND_GRADE: ghcr.io/${{ github.repository }}/frontend-grade
+  FRONTEND_API_URL: https://api-dash-tg-grade.arvsystems.cloud
+
+concurrency:
+  group: build-grade-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build & Push (grade)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Short SHA
+        id: meta
+        run: echo "short_sha=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
+      - name: Login GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Setup Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Cache Docker layers (API)
+        uses: actions/cache@v4
+        with:
+          path: /tmp/.buildx-cache-api-grade
+          key: ${{ runner.os }}-buildx-api-grade-${{ github.sha }}
+          restore-keys: ${{ runner.os }}-buildx-api-grade-
+
+      - name: Build & Push API (grade)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: |
+            ${{ env.IMAGE_API_GRADE }}:${{ steps.meta.outputs.short_sha }}
+            ${{ env.IMAGE_API_GRADE }}:latest
+          cache-from: type=local,src=/tmp/.buildx-cache-api-grade
+          cache-to: type=local,dest=/tmp/.buildx-cache-api-grade-new,mode=max
+
+      - name: Cache Docker layers (Frontend)
+        uses: actions/cache@v4
+        with:
+          path: /tmp/.buildx-cache-frontend-grade
+          key: ${{ runner.os }}-buildx-frontend-grade-${{ github.sha }}
+          restore-keys: ${{ runner.os }}-buildx-frontend-grade-
+
+      - name: Build & Push Frontend (grade)
+        uses: docker/build-push-action@v5
+        with:
+          context: ./esoccerdashboard
+          file: ./esoccerdashboard/Dockerfile
+          push: true
+          build-args: |
+            VITE_API_BASE_URL=${{ env.FRONTEND_API_URL }}
+          tags: |
+            ${{ env.IMAGE_FRONTEND_GRADE }}:${{ steps.meta.outputs.short_sha }}
+            ${{ env.IMAGE_FRONTEND_GRADE }}:latest
+          cache-from: type=local,src=/tmp/.buildx-cache-frontend-grade
+          cache-to: type=local,dest=/tmp/.buildx-cache-frontend-grade-new,mode=max
+
+      - name: Move caches
+        run: |
+          rm -rf /tmp/.buildx-cache-api-grade /tmp/.buildx-cache-frontend-grade
+          mv /tmp/.buildx-cache-api-grade-new /tmp/.buildx-cache-api-grade
+          mv /tmp/.buildx-cache-frontend-grade-new /tmp/.buildx-cache-frontend-grade
+
+      - name: Summary
+        run: |
+          echo "✅ Imagens publicadas:"
+          echo "   API:      ${{ env.IMAGE_API_GRADE }}:latest"
+          echo "   Frontend: ${{ env.IMAGE_FRONTEND_GRADE }}:latest"
+          echo "   SHA:      ${{ steps.meta.outputs.short_sha }}"
+
+  pull-vps:
+    name: Pull images na VPS
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Pull via SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          timeout: 60s
+          command_timeout: 5m
+          script: |
+            set -e
+            echo "🔐 Login no registry..."
+            echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+            echo "📦 Pulling imagens grade..."
+            docker pull "${{ env.IMAGE_API_GRADE }}:latest"
+            docker pull "${{ env.IMAGE_FRONTEND_GRADE }}:latest"
+            echo "🧹 Limpando imagens antigas..."
+            docker image prune -f
+            echo "✅ Atualize o stack dashtg-grade no Portainer (Pull & Redeploy)."

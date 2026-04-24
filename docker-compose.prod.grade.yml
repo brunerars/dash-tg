@@ -1,0 +1,162 @@
+# docker-compose.prod.grade.yml
+# ------------------------------
+# Stack paralela do dash-tg com a feature de grade integrada.
+# NAO substitui o stack atual (docker-compose.prod.yml) — sobe em paralelo
+# sob novos dominios e com recursos proprios (Postgres, Redis, workers).
+#
+# Deploy via Portainer Stacks (Swarm). Env vars que precisam estar setadas
+# no Portainer stack:
+#   - IMAGE_API_GRADE          (ex.: ghcr.io/owner/repo/api-grade)
+#   - IMAGE_FRONTEND_GRADE     (ex.: ghcr.io/owner/repo/frontend-grade)
+#   - JWT_SECRET               (openssl rand -hex 32)
+#   - POSTGRES_PASSWORD        (senha forte — nao usar o default)
+#   - APP_USERS                (formato user1:argon2hash|||user2:argon2hash)
+#
+# Ver DEPLOY_GRADE.md para passo-a-passo completo.
+
+version: "3.8"
+
+services:
+  # ================= API (FastAPI) =================
+  api:
+    image: ${IMAGE_API_GRADE}:latest
+    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      - REDIS_URL=redis://dashtg_grade_redis:6379
+      - CACHE_TTL_ANALYSIS=${CACHE_TTL_ANALYSIS:-86400}
+      - CACHE_TTL_EXPORT=${CACHE_TTL_EXPORT:-3600}
+      - CACHE_TTL_JOB=${CACHE_TTL_JOB:-7200}
+      - PRECOMPUTE_WORKERS=${PRECOMPUTE_WORKERS:-2}
+      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET obrigatorio}
+      - JWT_EXPIRE_MINUTES=${JWT_EXPIRE_MINUTES:-720}
+      - FRONTEND_ORIGIN=https://dash-tg-grade.arvsystems.cloud
+      - SECURE_COOKIES=true
+      - APP_USERS=${APP_USERS:-}
+      - DATABASE_URL=postgresql+asyncpg://dashgrade:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD obrigatorio}@dashtg_grade_postgres:5432/dash_grade
+      - RUN_SCHEDULERS=false
+    networks:
+      - network_public
+      - dashtg_grade_internal
+    volumes:
+      - /opt/dashtg-grade/data:/app/data:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:8000/health', timeout=3.0)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    deploy:
+      replicas: 1
+      resources:
+        limits:
+          memory: 768M
+      restart_policy:
+        condition: on-failure
+      labels:
+        - traefik.enable=true
+        - traefik.docker.network=network_public
+        - traefik.http.routers.dashtg_grade_api.rule=Host(`api-dash-tg-grade.arvsystems.cloud`)
+        - traefik.http.routers.dashtg_grade_api.entrypoints=websecure
+        - traefik.http.routers.dashtg_grade_api.tls.certresolver=letsencryptresolver
+        - traefik.http.services.dashtg_grade_api.loadbalancer.server.port=8000
+        - traefik.http.routers.dashtg_grade_api.service=dashtg_grade_api
+
+  # ================= Workers (scraper + favorites sync) =================
+  workers:
+    image: ${IMAGE_API_GRADE}:latest
+    command: ["python", "run_workers.py"]
+    environment:
+      - REDIS_URL=redis://dashtg_grade_redis:6379
+      - DATABASE_URL=postgresql+asyncpg://dashgrade:${POSTGRES_PASSWORD}@dashtg_grade_postgres:5432/dash_grade
+      - JWT_SECRET=${JWT_SECRET}
+      - JWT_EXPIRE_MINUTES=${JWT_EXPIRE_MINUTES:-720}
+      - FRONTEND_ORIGIN=https://dash-tg-grade.arvsystems.cloud
+      - SECURE_COOKIES=true
+      - RUN_SCHEDULERS=true
+      - SCRAPER_REFRESH_MIN=${SCRAPER_REFRESH_MIN:-10}
+      - FAVORITES_SYNC_MIN=${FAVORITES_SYNC_MIN:-10}
+      - SCRAPER_MAX_WORKERS=${SCRAPER_MAX_WORKERS:-2}
+      - SCRAPER_SCHEDULER_LOCK_KEY=dashtg_grade:scraper:scheduler:lock
+      - FAVORITES_SYNC_LOCK_KEY=dashtg_grade:favorites:sync:lock
+    networks:
+      - dashtg_grade_internal
+    deploy:
+      replicas: 1
+      resources:
+        limits:
+          memory: 1024M
+          cpus: '1.5'
+      restart_policy:
+        condition: on-failure
+
+  # ================= Frontend (Nginx servindo build Vite) =================
+  frontend:
+    image: ${IMAGE_FRONTEND_GRADE}:latest
+    networks:
+      - network_public
+    deploy:
+      replicas: 1
+      resources:
+        limits:
+          memory: 128M
+      restart_policy:
+        condition: on-failure
+      labels:
+        - traefik.enable=true
+        - traefik.docker.network=network_public
+        - traefik.http.routers.dashtg_grade_front.rule=Host(`dash-tg-grade.arvsystems.cloud`)
+        - traefik.http.routers.dashtg_grade_front.entrypoints=websecure
+        - traefik.http.routers.dashtg_grade_front.tls.certresolver=letsencryptresolver
+        - traefik.http.services.dashtg_grade_front.loadbalancer.server.port=80
+        - traefik.http.routers.dashtg_grade_front.service=dashtg_grade_front
+
+  # ================= Redis =================
+  dashtg_grade_redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes --appendfsync everysec
+    volumes:
+      - dashtg_grade_redis_data:/data
+    networks:
+      - dashtg_grade_internal
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+      placement:
+        constraints:
+          - node.role == manager
+
+  # ================= Postgres =================
+  dashtg_grade_postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: dashgrade
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: dash_grade
+    volumes:
+      - dashtg_grade_postgres_data:/var/lib/postgresql/data
+    networks:
+      - dashtg_grade_internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dashgrade -d dash_grade"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+      placement:
+        constraints:
+          - node.role == manager
+
+networks:
+  network_public:
+    external: true
+  dashtg_grade_internal:
+    driver: overlay
+    attachable: true
+
+volumes:
+  dashtg_grade_redis_data:
+  dashtg_grade_postgres_data:

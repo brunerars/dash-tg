@@ -1,5 +1,5 @@
 import { NavLink } from "react-router";
-import { Home, Zap, TrendingUp, ChevronLeft, ChevronRight } from "lucide-react";
+import { Home, Zap, TrendingUp, Calendar, Star, ChevronLeft, ChevronRight } from "lucide-react";
 import { useState } from "react";
 import { useTheme } from "./ThemeContext";
 
@@ -7,6 +7,8 @@ const navItems = [
   { to: "/", icon: Home, label: "Inicio" },
   { to: "/dale", icon: Zap, label: "Dale" },
   { to: "/over-under", icon: TrendingUp, label: "Over/Under" },
+  { to: "/grade", icon: Calendar, label: "Grade do Dia" },
+  { to: "/favoritos", icon: Star, label: "Favoritos" },
 ];
 
 export function Sidebar() {

@@ -3,6 +3,7 @@ import { Sidebar } from "./Sidebar";
 import { useTheme } from "./ThemeContext";
 import { useAuth } from "./AuthContext";
 import { useSession, defaultPageState } from "./SessionContext";
+import { FlagsProvider } from "./FlagsContext";
 import { Moon, Sun, LogOut } from "lucide-react";
 
 export function Layout() {
@@ -20,6 +21,7 @@ export function Layout() {
   };
 
   return (
+    <FlagsProvider>
     <div className="flex h-screen w-full overflow-hidden">
       {/* Ambient blobs — dark mode only */}
       {isDark && (
@@ -120,5 +122,6 @@ export function Layout() {
         </main>
       </div>
     </div>
+    </FlagsProvider>
   );
 }

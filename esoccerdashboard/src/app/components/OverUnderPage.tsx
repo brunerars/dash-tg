@@ -406,6 +406,7 @@ export function OverUnderPage() {
           columnConfig={columnConfig}
           onColumnConfigChange={(cfg) => set("columnConfig", cfg)}
           cacheKey={cacheKey}
+          strategy="OverUnder"
           emptyMessage="Nenhuma dupla encontrada com os filtros selecionados. Tente ajustar os parametros."
         />
       ) : (

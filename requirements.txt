@@ -12,3 +12,12 @@ pydantic
 pytest
 pyjwt
 pwdlib[argon2]
+# --- feat/grade ---
+sqlalchemy[asyncio]
+asyncpg
+alembic
+apscheduler
+playwright
+beautifulsoup4
+httpx
+requests

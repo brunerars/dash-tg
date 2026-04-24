@@ -285,6 +285,117 @@ function cleanDupla(raw: unknown): string {
     .trim();
 }
 
+// ---------------------------------------------------------------------------
+// Grade / Flags
+// ---------------------------------------------------------------------------
+
+export interface Flag {
+  id: string;
+  p1: string;
+  p2: string;
+  dupla_display: string;
+  strategy: string;
+  flagged_at: string | null;
+  snapshot_cache_key: string | null;
+  snapshot: Record<string, unknown>;
+  // Enriched no GET /flags (pode faltar em POST)
+  upcoming_count?: number;
+  past_count?: number;
+  next_game_at?: string | null;
+  last_game_at?: string | null;
+}
+
+export interface FlagCreateResponse extends Flag {
+  games_added: number;
+}
+
+export interface GridItem {
+  match_id: string;
+  favorite_id: string;
+  dupla_display: string;
+  strategy: string;
+  liga: string;
+  event_date: string | null;
+  event_time: string | null;
+  event_dt_br: string | null;
+  home_team: string | null;
+  home_player: string | null;
+  away_team: string | null;
+  away_player: string | null;
+  snapshot: Record<string, unknown>;
+  snapshot_cache_key: string | null;
+  flagged_at: string | null;
+}
+
+export async function fetchFlags(): Promise<Flag[]> {
+  const res = await apiFetch("/flags");
+  if (!res.ok) throw new Error(`Erro ao buscar flags: ${res.status}`);
+  return res.json();
+}
+
+export async function createFlag(
+  dupla: string,
+  strategy: string,
+  snapshot: Record<string, unknown>,
+  snapshotCacheKey?: string,
+): Promise<FlagCreateResponse> {
+  const res = await apiFetch("/flags", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      dupla,
+      strategy,
+      snapshot,
+      snapshot_cache_key: snapshotCacheKey ?? null,
+    }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err?.detail ?? `Erro ao flagar: ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function deleteFlag(favoriteId: string): Promise<void> {
+  const res = await apiFetch(`/flags/${favoriteId}`, { method: "DELETE" });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err?.detail ?? `Erro ao remover flag: ${res.status}`);
+  }
+}
+
+export async function refreshFlagSnapshot(
+  favoriteId: string,
+  snapshot: Record<string, unknown>,
+  snapshotCacheKey?: string,
+): Promise<void> {
+  const res = await apiFetch(`/flags/${favoriteId}/refresh-snapshot`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ snapshot, snapshot_cache_key: snapshotCacheKey ?? null }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err?.detail ?? `Erro ao atualizar snapshot: ${res.status}`);
+  }
+}
+
+export async function fetchGrade(dateFrom?: string, dateTo?: string): Promise<{ total: number; items: GridItem[] }> {
+  const params = new URLSearchParams();
+  if (dateFrom) params.set("date_from", dateFrom);
+  if (dateTo) params.set("date_to", dateTo);
+  const qs = params.toString();
+  const res = await apiFetch(`/grade${qs ? "?" + qs : ""}`);
+  if (!res.ok) throw new Error(`Erro ao buscar grade: ${res.status}`);
+  return res.json();
+}
+
+export async function syncGrade(): Promise<{ added: number }> {
+  const res = await apiFetch("/grade/sync", { method: "POST" });
+  if (!res.ok) throw new Error(`Erro no sync da grade: ${res.status}`);
+  return res.json();
+}
+
 // Normaliza um item da resposta da API para o formato de ResultRow.
 export function normalizeResult(item: Record<string, unknown>, index: number) {
   return {

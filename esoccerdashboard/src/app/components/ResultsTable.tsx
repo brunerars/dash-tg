@@ -1,7 +1,8 @@
-import { ArrowUpDown, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, FileText, Settings } from "lucide-react";
+import { ArrowUpDown, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, FileText, Settings, Star, AlertTriangle } from "lucide-react";
 import { useState, useMemo, useRef, useEffect, useCallback } from "react";
 import { useTheme } from "./ThemeContext";
 import { ColumnConfigModal, type ColumnDef } from "./ColumnConfigModal";
+import { useFlags } from "./FlagsContext";
 
 export interface ResultRow {
   id: number;
@@ -34,6 +35,7 @@ interface ResultsTableProps {
   onColumnConfigChange?: (config: ColumnDef[]) => void;
   emptyMessage?: string;
   cacheKey?: string;
+  strategy?: string;
 }
 
 function PctBar({ value }: { value: number }) {
@@ -113,7 +115,28 @@ function LigaBadge({ value }: { value: string }) {
 
 const PAGE_SIZE = 100;
 
-export function ResultsTable({ data, columns, allColumns, columnConfig, onColumnConfigChange, emptyMessage = "Nenhum resultado encontrado", cacheKey }: ResultsTableProps) {
+export function ResultsTable({ data, columns, allColumns, columnConfig, onColumnConfigChange, emptyMessage = "Nenhum resultado encontrado", cacheKey, strategy }: ResultsTableProps) {
+  const flags = useFlags();
+  const [pendingFlagId, setPendingFlagId] = useState<number | null>(null);
+
+  const handleFlag = useCallback(async (row: ResultRow) => {
+    if (!strategy) return;
+    setPendingFlagId(row.id);
+    try {
+      const snapshot: Record<string, unknown> = { ...row };
+      const isStale = flags.isStale(row.dupla, strategy, cacheKey);
+      if (isStale) {
+        await flags.refreshSnapshot(row.dupla, strategy, snapshot, cacheKey);
+      } else {
+        await flags.toggle(row.dupla, strategy, snapshot, cacheKey);
+      }
+    } catch (e) {
+      console.error(e);
+      alert(e instanceof Error ? e.message : "Erro ao flagar dupla");
+    } finally {
+      setPendingFlagId(null);
+    }
+  }, [flags, strategy, cacheKey]);
   const [sortKey, setSortKey] = useState<string>("porcentagem");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [canScrollLeft, setCanScrollLeft] = useState(false);
@@ -357,6 +380,18 @@ export function ResultsTable({ data, columns, allColumns, columnConfig, onColumn
           <table className="w-full">
             <thead>
               <tr className="border-b border-border">
+                {strategy && (
+                  <th
+                    className="px-3 py-3 text-left text-muted-foreground whitespace-nowrap sticky left-0 z-[1]"
+                    style={{
+                      fontSize: "0.85rem",
+                      background: isDark ? "rgba(5,5,5,0.9)" : "#f5f5f5",
+                    }}
+                    title="Flag para adicionar a Grade do Dia"
+                  >
+                    <Star className="w-3.5 h-3.5" />
+                  </th>
+                )}
                 {columns.map((col) => (
                   <th
                     key={col.key}
@@ -386,30 +421,69 @@ export function ResultsTable({ data, columns, allColumns, columnConfig, onColumn
               </tr>
             </thead>
             <tbody>
-              {pageRows.map((row, i) => (
-                <tr
-                  key={row.id}
-                  className={`border-b border-border/50 transition-colors hover:bg-secondary/30 ${i % 2 === 0 ? "" : "bg-secondary/10"
-                    }`}
-                >
-                  {columns.map((col) => (
-                    <td key={col.key} className="px-4 py-3 text-foreground" style={{ fontSize: "0.9rem" }}>
-                      {renderCell(row, col.key)}
-                    </td>
-                  ))}
-                  {cacheKey && (
-                    <td className="px-4 py-3">
-                      <button
-                        onClick={() => openBlueprint(row)}
-                        className="text-muted-foreground hover:text-primary transition-colors"
-                        title="Ver jogos detalhados (nova aba)"
+              {pageRows.map((row, i) => {
+                const flagged = strategy ? flags.isFlagged(row.dupla, strategy) : null;
+                const stale = strategy ? flags.isStale(row.dupla, strategy, cacheKey) : false;
+                const rowBg = i % 2 === 0
+                  ? (isDark ? "rgb(5,5,5)" : "#ffffff")
+                  : (isDark ? "rgb(12,12,12)" : "#fafafa");
+                return (
+                  <tr
+                    key={row.id}
+                    className={`border-b border-border/50 transition-colors hover:bg-secondary/30 ${i % 2 === 0 ? "" : "bg-secondary/10"
+                      }`}
+                  >
+                    {strategy && (
+                      <td
+                        className="px-3 py-3 sticky left-0 z-[1]"
+                        style={{ background: rowBg }}
                       >
-                        <FileText className="w-4 h-4" />
-                      </button>
-                    </td>
-                  )}
-                </tr>
-              ))}
+                        <button
+                          onClick={() => handleFlag(row)}
+                          disabled={pendingFlagId === row.id}
+                          className="transition-colors disabled:opacity-40 relative"
+                          title={
+                            flagged
+                              ? stale
+                                ? "Snapshot desatualizado — clique para atualizar"
+                                : "Remover da Grade do Dia"
+                              : "Adicionar a Grade do Dia"
+                          }
+                        >
+                          <Star
+                            className="w-4 h-4"
+                            fill={flagged ? "#ea580c" : "none"}
+                            color={flagged ? "#ea580c" : (isDark ? "#737373" : "#a1a1a1")}
+                          />
+                          {stale && (
+                            <AlertTriangle
+                              className="w-3 h-3 absolute -top-1 -right-1"
+                              color="#f59e0b"
+                              fill="#f59e0b"
+                            />
+                          )}
+                        </button>
+                      </td>
+                    )}
+                    {columns.map((col) => (
+                      <td key={col.key} className="px-4 py-3 text-foreground" style={{ fontSize: "0.9rem" }}>
+                        {renderCell(row, col.key)}
+                      </td>
+                    ))}
+                    {cacheKey && (
+                      <td className="px-4 py-3">
+                        <button
+                          onClick={() => openBlueprint(row)}
+                          className="text-muted-foreground hover:text-primary transition-colors"
+                          title="Ver jogos detalhados (nova aba)"
+                        >
+                          <FileText className="w-4 h-4" />
+                        </button>
+                      </td>
+                    )}
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>

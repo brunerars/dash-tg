@@ -12,6 +12,7 @@ import { useState } from "react";
 import type { ColumnDef } from "./ColumnConfigModal";
 
 const STRATEGY_ID = "eSoccer — Dupla";
+const STRATEGY_FLAG = "Dale";
 
 const daleColumns = [
   { key: "dupla", label: "Dupla" },
@@ -214,6 +215,7 @@ export function DalePage() {
           columnConfig={columnConfig}
           onColumnConfigChange={(cfg) => set("columnConfig", cfg)}
           cacheKey={cacheKey}
+          strategy={STRATEGY_FLAG}
           emptyMessage="Nenhuma dupla encontrada com os filtros selecionados. Tente ajustar os parametros."
         />
       ) : (

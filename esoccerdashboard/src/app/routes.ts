@@ -4,6 +4,8 @@ import { HomePage } from "./components/HomePage";
 import { DalePage } from "./components/DalePage";
 import { OverUnderPage } from "./components/OverUnderPage";
 import { BlueprintPage } from "./components/BlueprintPage";
+import { GradePage } from "./components/GradePage";
+import { FavoritosPage } from "./components/FavoritosPage";
 import { LoginPage } from "./components/LoginPage";
 import { ProtectedRoute } from "./components/ProtectedRoute";
 import { AuthLayout } from "./components/AuthLayout";
@@ -26,6 +28,8 @@ export const router = createBrowserRouter([
               { index: true, Component: HomePage },
               { path: "dale", Component: DalePage },
               { path: "over-under", Component: OverUnderPage },
+              { path: "grade", Component: GradePage },
+              { path: "favoritos", Component: FavoritosPage },
               { path: "blueprint/:cacheKey", Component: BlueprintPage },
             ],
           },

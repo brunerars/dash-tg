@@ -48,6 +48,17 @@ else:
 FRONTEND_ORIGIN: str = os.getenv("FRONTEND_ORIGIN", "http://localhost:3000")
 SECURE_COOKIES: bool = os.getenv("SECURE_COOKIES", "true").lower() == "true"
 
+# --- feat/grade ---
+DATABASE_URL: str = os.getenv(
+    "DATABASE_URL",
+    "postgresql+asyncpg://dashgrade:dashgrade@postgres:5432/dash_grade",
+)
+RUN_SCHEDULERS: bool = os.getenv("RUN_SCHEDULERS", "false").lower() == "true"
+SCRAPER_REFRESH_MIN: int = int(os.getenv("SCRAPER_REFRESH_MIN", "10"))
+FAVORITES_SYNC_MIN: int = int(os.getenv("FAVORITES_SYNC_MIN", "10"))
+SCRAPER_SCHEDULER_LOCK_KEY: str = os.getenv("SCRAPER_SCHEDULER_LOCK_KEY", "dashtg:scraper:scheduler:lock")
+FAVORITES_SYNC_LOCK_KEY: str = os.getenv("FAVORITES_SYNC_LOCK_KEY", "dashtg:favorites:sync:lock")
+
 # Startup validation — fail fast if JWT_SECRET is missing or too short
 if not JWT_SECRET or len(JWT_SECRET) < 32:
     import sys

@@ -10,22 +10,62 @@ services:
   api:
     build: .
     ports:
-      - "8000:8000"
+      # Porta externa 8001 para rodar em paralelo ao dash-tg atual (que usa 8000)
+      - "8001:8000"
     env_file: .env
     depends_on:
       redis:
         condition: service_started
+      postgres:
+        condition: service_healthy
       cache-flush:
         condition: service_completed_successfully
     restart: unless-stopped
     volumes:
       - ./data:/app/data:ro
+      # Bind-mount do codigo pra dev loop rapido — alteracoes python refletem sem rebuild
+      # (uvicorn --reload reinicia ao detectar mudanca). Em prod, remover este mount.
+      - ./:/app:rw
+
+  workers:
+    build: .
+    command: python run_workers.py
+    env_file: .env
+    environment:
+      - RUN_SCHEDULERS=true
+    depends_on:
+      redis:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    volumes:
+      - ./:/app:rw
 
   redis:
     image: redis:7-alpine
+    command: redis-server --appendonly yes --appendfsync everysec
     restart: unless-stopped
     volumes:
       - redis_data:/data
 
+  postgres:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-dashgrade}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dashgrade}
+      POSTGRES_DB: ${POSTGRES_DB:-dash_grade}
+    ports:
+      - "5433:5432"  # 5432 ocupado pelo v3
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-dashgrade} -d ${POSTGRES_DB:-dash_grade}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
 volumes:
   redis_data:
+  postgres_data:
