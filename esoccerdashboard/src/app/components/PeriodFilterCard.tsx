@@ -2,11 +2,14 @@ import { Calendar } from "lucide-react";
 import { useState } from "react";
 import { useTheme } from "./ThemeContext";
 
+export type PeriodType = "all" | "15d" | "30d" | "60d" | "90d" | "custom";
+
 interface PeriodFilterCardProps {
   dateFrom: string;
   dateTo: string;
   onDateFromChange: (v: string) => void;
   onDateToChange: (v: string) => void;
+  onPeriodTypeChange?: (type: PeriodType) => void;
 }
 
 export function PeriodFilterCard({
@@ -14,16 +17,26 @@ export function PeriodFilterCard({
   dateTo,
   onDateFromChange,
   onDateToChange,
+  onPeriodTypeChange,
 }: PeriodFilterCardProps) {
-  const [periodType, setPeriodType] = useState<"all" | "custom">("all");
+  type PeriodType = "all" | "15d" | "30d" | "60d" | "90d" | "custom";
+  const [periodType, setPeriodType] = useState<PeriodType>("all");
   const { theme } = useTheme();
   const isDark = theme === "dark";
 
-  const handlePeriodType = (type: "all" | "custom") => {
+  const handlePeriodType = (type: PeriodType) => {
     setPeriodType(type);
+    onPeriodTypeChange?.(type);
     if (type === "all") {
       onDateFromChange("");
       onDateToChange("");
+    } else if (type !== "custom") {
+      const days = parseInt(type);
+      const to = new Date();
+      const from = new Date();
+      from.setDate(from.getDate() - days);
+      onDateFromChange(from.toISOString().slice(0, 10));
+      onDateToChange(to.toISOString().slice(0, 10));
     }
   };
 
@@ -36,27 +49,23 @@ export function PeriodFilterCard({
         Filtrar por Período
       </span>
 
-      <div className="flex gap-1">
-        <button
-          onClick={() => handlePeriodType("all")}
-          className={`px-3 py-1.5 rounded-lg text-sm transition-colors ${
-            periodType === "all"
-              ? "bg-primary text-primary-foreground"
-              : "bg-secondary text-secondary-foreground hover:bg-secondary/80"
-          }`}
-        >
-          Todos
-        </button>
-        <button
-          onClick={() => handlePeriodType("custom")}
-          className={`px-3 py-1.5 rounded-lg text-sm transition-colors ${
-            periodType === "custom"
-              ? "bg-primary text-primary-foreground"
-              : "bg-secondary text-secondary-foreground hover:bg-secondary/80"
-          }`}
-        >
-          Personalizado
-        </button>
+      <div className="flex gap-1 flex-wrap">
+        {(["all", "15d", "30d", "60d", "90d", "custom"] as const).map((type) => {
+          const label = type === "all" ? "Todos" : type === "custom" ? "Personalizado" : type;
+          return (
+            <button
+              key={type}
+              onClick={() => handlePeriodType(type)}
+              className={`px-3 py-1.5 rounded-lg text-sm transition-colors ${
+                periodType === type
+                  ? "bg-primary text-primary-foreground"
+                  : "bg-secondary text-secondary-foreground hover:bg-secondary/80"
+              }`}
+            >
+              {label}
+            </button>
+          );
+        })}
       </div>
 
       {periodType === "custom" && (
@@ -77,6 +86,9 @@ export function PeriodFilterCard({
             className="px-3 py-1.5 rounded-lg bg-input-background border border-border text-foreground focus:border-primary focus:ring-1 focus:ring-primary transition-colors"
             style={{ fontSize: "0.85rem", colorScheme: isDark ? "dark" : "light" }}
           />
+          <span className="text-primary" style={{ fontSize: "0.75rem" }}>
+            Clique em Analisar para aplicar
+          </span>
         </div>
       )}
     </div>
