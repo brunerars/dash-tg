@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Calendar, RefreshCw, Star, X, AlertTriangle } from "lucide-react";
+import { Calendar, RefreshCw, Star, X, AlertTriangle, Copy } from "lucide-react";
 import { fetchGrade, syncGrade, type GridItem } from "../services/api";
 import { useFlags } from "./FlagsContext";
 import { useTheme } from "./ThemeContext";
@@ -126,6 +126,28 @@ export function GradePage() {
     await load();
   };
 
+  // Quebra "A vs B" / "A x B" / "A × B" em [A, B]. Usa home_player/away_player quando existem.
+  const extractPair = (it: GridItem): [string, string] => {
+    if (it.home_player && it.away_player) return [it.home_player, it.away_player];
+    const parts = it.dupla_display.split(/\s+(?:vs|x|×)\s+/i);
+    return [parts[0]?.trim() ?? "", parts[1]?.trim() ?? ""];
+  };
+
+  const handleCopyDay = async (list: GridItem[]) => {
+    if (list.length === 0) return;
+    const tsv = list
+      .map((it) => {
+        const [p1, p2] = extractPair(it);
+        return `${it.event_time ?? ""}\t${p1}\t${p2}`;
+      })
+      .join("\n");
+    try {
+      await navigator.clipboard.writeText(tsv);
+    } catch {
+      alert("Não foi possível copiar — verifique permissão do navegador.");
+    }
+  };
+
   return (
     <div className="p-6 lg:p-8 max-w-6xl mx-auto space-y-6">
       <div className="flex items-center justify-between">
@@ -204,7 +226,7 @@ export function GradePage() {
       {!loading && !error && grouped.map(([day, list]) => (
         <div key={day} className="rounded-xl border border-border bg-card overflow-hidden">
           <div
-            className="px-4 py-3 border-b border-border font-semibold"
+            className="px-4 py-3 border-b border-border font-semibold flex items-center justify-between gap-3"
             style={{
               background: isDark ? "rgba(234,88,12,0.06)" : "rgba(0,0,0,0.03)",
               color: isDark ? "#ea580c" : "#0a0a0a",
@@ -212,7 +234,23 @@ export function GradePage() {
               letterSpacing: "0.02em",
             }}
           >
-            {dateLabel(day)} <span className="text-muted-foreground font-normal">• {list.length} jogo{list.length !== 1 ? "s" : ""}</span>
+            <span>
+              {dateLabel(day)} <span className="text-muted-foreground font-normal">• {list.length} jogo{list.length !== 1 ? "s" : ""}</span>
+            </span>
+            <button
+              onClick={() => void handleCopyDay(list)}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium transition-colors"
+              style={{
+                border: isDark ? "1px solid rgba(255,255,255,0.1)" : "1px solid #d4d4d4",
+                background: isDark ? "rgba(255,255,255,0.04)" : "rgba(0,0,0,0.03)",
+                color: isDark ? "#a1a1a1" : "#525252",
+                letterSpacing: "normal",
+              }}
+              title="Copia horário, jogador 1 e jogador 2 deste dia (TSV) pra colar na planilha"
+            >
+              <Copy className="w-3 h-3" />
+              Copiar dia
+            </button>
           </div>
           <div className="divide-y divide-border/40">
             {list.map((it) => {

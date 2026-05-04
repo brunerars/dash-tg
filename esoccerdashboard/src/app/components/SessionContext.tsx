@@ -23,6 +23,7 @@ export interface PageState {
   dateFrom: string;
   dateTo: string;
   playerSearch: string;
+  playerSearch2: string;
   selectedTournaments: string[];
   columnConfig: ColumnDef[];
   selectedHorarios: string[];
@@ -43,6 +44,7 @@ export const defaultPageState: PageState = {
   dateFrom: "",
   dateTo: "",
   playerSearch: "",
+  playerSearch2: "",
   selectedTournaments: [],
   columnConfig: [],
   selectedHorarios: [],

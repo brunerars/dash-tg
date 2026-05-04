@@ -86,9 +86,6 @@ export function PeriodFilterCard({
             className="px-3 py-1.5 rounded-lg bg-input-background border border-border text-foreground focus:border-primary focus:ring-1 focus:ring-primary transition-colors"
             style={{ fontSize: "0.85rem", colorScheme: isDark ? "dark" : "light" }}
           />
-          <span className="text-primary" style={{ fontSize: "0.75rem" }}>
-            Clique em Analisar para aplicar
-          </span>
         </div>
       )}
     </div>

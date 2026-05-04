@@ -237,9 +237,17 @@ export function OverUnderPage() {
   const filteredResults = useMemo(() => {
     let rows = allResults;
     rows = rows.filter((r) => r.partidas >= minMatches && r.porcentagem >= minPercentage);
-    if (overUnder.playerSearch.trim()) {
-      const q = overUnder.playerSearch.trim().toLowerCase();
-      rows = rows.filter((r) => r.dupla.toLowerCase().includes(q));
+    const q1 = overUnder.playerSearch.trim().toLowerCase();
+    const q2 = overUnder.playerSearch2.trim().toLowerCase();
+    if (q1 && q2) {
+      rows = rows.filter((r) => {
+        const d = r.dupla.toLowerCase();
+        return d.includes(q1) && d.includes(q2);
+      });
+    } else if (q1) {
+      rows = rows.filter((r) => r.dupla.toLowerCase().includes(q1));
+    } else if (q2) {
+      rows = rows.filter((r) => r.dupla.toLowerCase().includes(q2));
     }
     if (overUnder.selectedTournaments.length > 0)
       rows = rows.filter((r) => {
@@ -249,7 +257,7 @@ export function OverUnderPage() {
     if (overUnder.selectedLinhas.length > 0)
       rows = rows.filter((r) => overUnder.selectedLinhas.includes(r.linha));
     return rows;
-  }, [allResults, minMatches, minPercentage, overUnder.playerSearch, overUnder.selectedTournaments, overUnder.selectedLinhas]);
+  }, [allResults, minMatches, minPercentage, overUnder.playerSearch, overUnder.playerSearch2, overUnder.selectedTournaments, overUnder.selectedLinhas]);
 
   // Track last loaded cache key to prevent re-fetch loops
   const lastLoadedKeyRef = useRef<string>("");
@@ -261,16 +269,47 @@ export function OverUnderPage() {
   const hasAnalyzedRef = useRef(false);
   useEffect(() => { hasAnalyzedRef.current = hasAnalyzed; }, [hasAnalyzed]);
 
-  // Auto-load when polling resolves a combo the user is currently waiting on
+  // Auto-analyze ao mudar dateFrom/dateTo — mesmo padrão do DalePage.
+  // Também dispara ao terminar precompute se o usuário já tinha clicado num
+  // período enquanto o background ainda processava (assim a tabela carrega
+  // o filtro mesmo se o period cache não ficou quente — ex: 422).
+  const prevDateFromAuto = useRef(dateFrom);
+  const prevDateToAuto = useRef(dateTo);
+  const prevPrecomputingRef = useRef(isPrecomputing);
+  useEffect(() => {
+    const dateChanged =
+      prevDateFromAuto.current !== dateFrom || prevDateToAuto.current !== dateTo;
+    const finishedPrecompute =
+      prevPrecomputingRef.current === true && isPrecomputing === false;
+    prevDateFromAuto.current = dateFrom;
+    prevDateToAuto.current = dateTo;
+    prevPrecomputingRef.current = isPrecomputing;
+
+    if (!hasAnalyzedRef.current || files.length === 0) return;
+    // dispara se: data mudou OU precompute acabou e há período ativo
+    if (!dateChanged && !(finishedPrecompute && (dateFrom || dateTo))) return;
+    // Range custom incompleto — espera usuário preencher as duas datas
+    if ((dateFrom && !dateTo) || (!dateFrom && dateTo)) return;
+    if (isPrecomputing) return;
+
+    const timer = setTimeout(() => { handleAnalyze(); }, 300);
+    return () => clearTimeout(timer);
+  }, [dateFrom, dateTo, isPrecomputing]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Auto-load when polling resolves a combo the user is currently waiting on.
+  // IMPORTANTE: só carrega combo (sem filtro de período) se NÃO houver
+  // dateFrom/dateTo ativos. Senão o resultado filtrado pelo usuário seria
+  // sobrescrito toda vez que o background polling resolve um novo combo.
   useEffect(() => {
     if (!hasAnalyzedRef.current || files.length === 0) return;
+    if (dateFrom || dateTo) return;
     const sel = selectedFiles.length > 0 ? selectedFiles : files.map((f) => f.name);
     const comboKey = [...sel].sort().join("||");
     const cachedKey = comboCacheKeys[comboKey];
     if (cachedKey && !isAnalyzing) {
       _loadFromCache(cachedKey, [...sel]);
     }
-  }, [comboCacheKeys]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [comboCacheKeys, dateFrom, dateTo]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Auto-load when polling resolves a period the user is currently waiting on
   useEffect(() => {
@@ -373,7 +412,8 @@ export function OverUnderPage() {
     }
   };
 
-  // Period button click — try period cache (instant), or flag for recompute
+  // Period button click — try period cache (instant). Cache miss: o useEffect
+  // de dateFrom/dateTo auto-dispara handleAnalyze, sem precisar clicar em "Analisar".
   const handlePeriodChange = useCallback((type: PeriodType) => {
     if (!hasAnalyzedRef.current) return;
     setNeedsRecompute(false);
@@ -387,16 +427,15 @@ export function OverUnderPage() {
       return;
     }
     if (type === "custom") {
-      setNeedsRecompute(true);
+      // usuário vai mexer nas datas manualmente — useEffect auto-dispara quando completo
       return;
     }
-    // Quick period (15d, 30d, 60d, 90d) — check period cache
+    // Quick period (15d, 30d, 60d, 90d) — check period cache (instantâneo se quente)
     const cachedKey = periodCacheKeysRef.current[type];
     if (cachedKey) {
       _loadFromCache(cachedKey, files.map((f) => f.name));
-    } else {
-      setNeedsRecompute(true);
     }
+    // else: PeriodFilterCard atualiza dateFrom/dateTo → useEffect auto-dispara handleAnalyze
   }, [files, selectedFiles, _loadFromCache]);
 
   return (
@@ -478,6 +517,8 @@ export function OverUnderPage() {
           results={allResults}
           playerSearch={overUnder.playerSearch}
           onPlayerSearchChange={(v) => set("playerSearch", v)}
+          playerSearch2={overUnder.playerSearch2}
+          onPlayerSearch2Change={(v) => set("playerSearch2", v)}
           allFileNames={allFileNames}
           selectedFiles={overUnder.selectedFiles}
           onSelectedFilesChange={(v) => set("selectedFiles", v)}

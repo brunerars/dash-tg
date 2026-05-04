@@ -65,9 +65,17 @@ export function DalePage() {
   const filteredResults = useMemo(() => {
     let rows = allResults;
     rows = rows.filter((r) => r.partidas >= minMatches && r.porcentagem >= minPercentage);
-    if (dale.playerSearch.trim()) {
-      const q = dale.playerSearch.trim().toLowerCase();
-      rows = rows.filter((r) => r.dupla.toLowerCase().includes(q));
+    const q1 = dale.playerSearch.trim().toLowerCase();
+    const q2 = dale.playerSearch2.trim().toLowerCase();
+    if (q1 && q2) {
+      rows = rows.filter((r) => {
+        const d = r.dupla.toLowerCase();
+        return d.includes(q1) && d.includes(q2);
+      });
+    } else if (q1) {
+      rows = rows.filter((r) => r.dupla.toLowerCase().includes(q1));
+    } else if (q2) {
+      rows = rows.filter((r) => r.dupla.toLowerCase().includes(q2));
     }
     if (dale.selectedTournaments.length > 0)
       rows = rows.filter((r) => {
@@ -75,7 +83,7 @@ export function DalePage() {
         return dale.selectedTournaments.some((t) => leagues.includes(t));
       });
     return rows;
-  }, [allResults, minMatches, minPercentage, dale.playerSearch, dale.selectedTournaments]);
+  }, [allResults, minMatches, minPercentage, dale.playerSearch, dale.playerSearch2, dale.selectedTournaments]);
 
   // Ref always pointing to latest dale state (avoids stale closures in setTimeout)
   const daleRef = useRef(dale);
@@ -191,6 +199,8 @@ export function DalePage() {
           results={allResults}
           playerSearch={dale.playerSearch}
           onPlayerSearchChange={(v) => set("playerSearch", v)}
+          playerSearch2={dale.playerSearch2}
+          onPlayerSearch2Change={(v) => set("playerSearch2", v)}
           allFileNames={allFileNames}
           selectedFiles={dale.selectedFiles}
           onSelectedFilesChange={(v) => set("selectedFiles", v)}

@@ -7,6 +7,8 @@ interface FilterBarProps {
   results: ResultRow[];
   playerSearch: string;
   onPlayerSearchChange: (v: string) => void;
+  playerSearch2: string;
+  onPlayerSearch2Change: (v: string) => void;
   allFileNames: string[];
   selectedFiles: string[];
   onSelectedFilesChange: (v: string[]) => void;
@@ -29,6 +31,8 @@ export function FilterBar({
   results,
   playerSearch,
   onPlayerSearchChange,
+  playerSearch2,
+  onPlayerSearch2Change,
   allFileNames,
   selectedFiles,
   onSelectedFilesChange,
@@ -176,22 +180,41 @@ export function FilterBar({
     <div className="rounded-xl border border-border bg-card p-4" style={{ overflow: "visible", position: "relative", zIndex: 20 }}>
       <div className="grid gap-x-4 gap-y-3" style={{ gridTemplateColumns: gridCols, overflow: "visible" }}>
 
-        {/* Row 1, Col 1: Player Search */}
-        <div className="flex items-center gap-2">
-          <Search className="w-3.5 h-3.5 shrink-0" style={{ color: "#ea580c" }} />
-          <div className="flex-1 relative">
-            <input
-              type="text"
-              value={playerSearch}
-              onChange={(e) => onPlayerSearchChange(e.target.value)}
-              placeholder="Buscar jogador..."
-              style={{ ...inputStyle, width: "100%", paddingRight: 28 }}
-            />
-            {playerSearch && (
-              <button onClick={() => onPlayerSearchChange("")} className="absolute right-2 top-1/2 -translate-y-1/2 transition-colors" style={{ color: labelColor }}>
-                <X className="w-3.5 h-3.5" />
-              </button>
-            )}
+        {/* Row 1, Col 1: Player Search — 2 inputs empilhados pra buscar dupla */}
+        <div className="flex flex-col gap-1.5">
+          <div className="flex items-center gap-2">
+            <Search className="w-3.5 h-3.5 shrink-0" style={{ color: "#ea580c" }} />
+            <div className="flex-1 relative">
+              <input
+                type="text"
+                value={playerSearch}
+                onChange={(e) => onPlayerSearchChange(e.target.value)}
+                placeholder="Jogador 1..."
+                style={{ ...inputStyle, width: "100%", paddingRight: 28 }}
+              />
+              {playerSearch && (
+                <button onClick={() => onPlayerSearchChange("")} className="absolute right-2 top-1/2 -translate-y-1/2 transition-colors" style={{ color: labelColor }}>
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <Search className="w-3.5 h-3.5 shrink-0" style={{ color: "transparent" }} />
+            <div className="flex-1 relative">
+              <input
+                type="text"
+                value={playerSearch2}
+                onChange={(e) => onPlayerSearch2Change(e.target.value)}
+                placeholder="Jogador 2 (opcional — busca a dupla)"
+                style={{ ...inputStyle, width: "100%", paddingRight: 28 }}
+              />
+              {playerSearch2 && (
+                <button onClick={() => onPlayerSearch2Change("")} className="absolute right-2 top-1/2 -translate-y-1/2 transition-colors" style={{ color: labelColor }}>
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
           </div>
         </div>
 
