@@ -26,7 +26,7 @@ services:
       - CACHE_TTL_ANALYSIS=${CACHE_TTL_ANALYSIS:-86400}
       - CACHE_TTL_EXPORT=${CACHE_TTL_EXPORT:-3600}
       - CACHE_TTL_JOB=${CACHE_TTL_JOB:-7200}
-      - PRECOMPUTE_WORKERS=${PRECOMPUTE_WORKERS:-2}
+      - PRECOMPUTE_WORKERS=${PRECOMPUTE_WORKERS:-1}
       - JWT_SECRET=${JWT_SECRET:?JWT_SECRET obrigatorio}
       - JWT_EXPIRE_MINUTES=${JWT_EXPIRE_MINUTES:-720}
       - FRONTEND_ORIGIN=https://dash-tg-grade.arvsystems.cloud
@@ -39,15 +39,15 @@ services:
       - dashtg_grade_internal
     healthcheck:
       test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:8000/health', timeout=3.0)"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
+      interval: 60s
+      timeout: 15s
+      retries: 5
+      start_period: 90s
     deploy:
       replicas: 1
       resources:
         limits:
-          memory: 768M
+          memory: 2048M
       restart_policy:
         condition: on-failure
       labels:
