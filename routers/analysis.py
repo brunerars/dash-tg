@@ -1,9 +1,9 @@
 from __future__ import annotations
 
+import gc
 import hashlib
 import io
 import json
-import pickle
 from datetime import date as date_type, time as time_type
 from typing import Annotated
 
@@ -70,20 +70,26 @@ def _build_analysis_result(
     files_bytes = [c for _, c in files_contents]
     cache_key = gerar_cache_key(files_bytes, strategy_name, date_from, date_to, horarios)
 
-    # 1. Carregar com cache individual por arquivo
+    # 1. Carregar com cache individual por arquivo (parquet+zstd)
     frames: list[pd.DataFrame] = []
     for name, content in files_contents:
         file_hash = hashlib.md5(content).hexdigest()
-        cached_pickle = get_file_df(file_hash)
-        if cached_pickle:
-            frames.append(pickle.loads(cached_pickle))
+        cached_bytes = get_file_df(file_hash)
+        if cached_bytes:
+            frames.append(pd.read_parquet(io.BytesIO(cached_bytes)))
         else:
             adapter = _UploadFileAdapter(name, content)
             result = load_tips_enviadas([adapter])
-            store_file_df(file_hash, pickle.dumps(result.df))
+            buf = io.BytesIO()
+            result.df.to_parquet(buf, engine="pyarrow", compression="zstd")
+            store_file_df(file_hash, buf.getvalue())
             frames.append(result.df)
+            del buf, result
 
     df = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+    # Libera lista de frames intermediarios — concat ja copiou
+    del frames
+    gc.collect()
     load_result = LoadResult(df=df, total_jogos_brutos=int(len(df)))
 
     # 1b. Filtrar por período (se informado) — antes da normalização e dedup

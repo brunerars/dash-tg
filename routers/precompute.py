@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import gc
+import io
 import logging
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -11,7 +13,6 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
 import hashlib
-import pickle
 
 from config.settings import PRECOMPUTE_WORKERS
 from config.strategies import ESTRATEGIAS, get_strategy_internal
@@ -36,11 +37,14 @@ _background_tasks: set[asyncio.Task] = set()
 
 
 def _preparse_files(files_contents: list[tuple[str, bytes]]) -> None:
-    """Parse each unique file and cache the DataFrame in Redis.
+    """Parse each unique file and cache the DataFrame in Redis as parquet+zstd.
+
+    Parquet+zstd footprint ~5-10x smaller than pickle (compressao colunar
+    nativa), e libera o DataFrame entre iteracoes via gc.collect() pra
+    evitar acumulo de RAM quando ha multiplos arquivos pesados.
 
     This runs BEFORE dispatching background jobs so that workers
-    get instant cache hits instead of re-parsing 25MB xlsx files.
-    Critical for performance: openpyxl takes ~2 min per 10MB file.
+    get instant cache hits instead of re-parsing the xlsx.
     """
     for name, content in files_contents:
         file_hash = hashlib.md5(content).hexdigest()
@@ -50,9 +54,18 @@ def _preparse_files(files_contents: list[tuple[str, bytes]]) -> None:
         logger.info("Pre-parsing %s (%d MB, hash=%s)...", name, len(content) // (1024 * 1024), file_hash[:8])
         adapter = _UploadFileAdapter(name, content)
         result = load_tips_enviadas([adapter])
-        pickled = pickle.dumps(result.df)
-        store_file_df(file_hash, pickled)
-        logger.info("Pre-parsed %s — %d rows, cached %d MB pickle", name, len(result.df), len(pickled) // (1024 * 1024))
+        rows = len(result.df)
+        buf = io.BytesIO()
+        result.df.to_parquet(buf, engine="pyarrow", compression="zstd")
+        parquet_bytes = buf.getvalue()
+        store_file_df(file_hash, parquet_bytes)
+        logger.info(
+            "Pre-parsed %s — %d rows, cached %d MB parquet (zstd)",
+            name, rows, len(parquet_bytes) // (1024 * 1024),
+        )
+        # Libera DataFrame e buffers — evita acumulo entre iteracoes
+        del result, buf, parquet_bytes
+        gc.collect()
 
 
 def _all_nonempty_combinations(
