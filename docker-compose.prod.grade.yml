@@ -77,6 +77,10 @@ services:
       - CACHE_TTL_EXPORT=${CACHE_TTL_EXPORT:-3600}
       - CACHE_TTL_JOB=${CACHE_TTL_JOB:-7200}
       - PRECOMPUTE_WORKERS=${PRECOMPUTE_WORKERS:-1}
+      # Worker nao autentica usuario, mas config/settings.py valida JWT_SECRET
+      # no import (sys.exit se faltar) — precisa ser passado igual a API.
+      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET obrigatorio}
+      - JWT_EXPIRE_MINUTES=${JWT_EXPIRE_MINUTES:-720}
       - DATABASE_URL=postgresql+asyncpg://dashgrade:${POSTGRES_PASSWORD}@dashtg_grade_postgres:5432/dash_grade
       - RUN_SCHEDULERS=false
     networks:
