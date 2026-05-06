@@ -22,3 +22,5 @@ playwright
 beautifulsoup4
 httpx
 requests
+# Queue de processamento pesado (precompute) — separa CPU/RAM da API
+arq
