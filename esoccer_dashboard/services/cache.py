@@ -85,16 +85,20 @@ def get_blueprint(cache_key: str) -> str | None:
     return raw.decode("utf-8") if raw else None
 
 
-def store_file_df(file_hash: str, pickled: bytes, ttl: int = CACHE_TTL_ANALYSIS) -> None:
-    """Armazena DataFrame parseado (pickle) de um arquivo individual."""
+def store_file_df(file_hash: str, parquet_bytes: bytes, ttl: int = CACHE_TTL_ANALYSIS) -> None:
+    """Armazena DataFrame parseado (parquet zstd) de um arquivo individual.
+
+    Prefixo `filedf:parquet:` invalida automaticamente o cache antigo (pickle)
+    da versao anterior — entradas pickle ficam orfas e expiram via TTL.
+    """
     r = get_redis_client()
-    r.setex(f"filedf:{file_hash}", ttl, pickled)
+    r.setex(f"filedf:parquet:{file_hash}", ttl, parquet_bytes)
 
 
 def get_file_df(file_hash: str) -> bytes | None:
-    """Recupera DataFrame parseado de um arquivo individual."""
+    """Recupera DataFrame parseado (parquet zstd) de um arquivo individual."""
     r = get_redis_client()
-    raw = r.get(f"filedf:{file_hash}")
+    raw = r.get(f"filedf:parquet:{file_hash}")
     return raw if raw else None
 
 

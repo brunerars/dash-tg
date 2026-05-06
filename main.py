@@ -49,9 +49,14 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Em dev (localhost), aceita qualquer porta — Vite frequentemente migra
+# entre 5173/5174/5175 quando ja tem outra instancia rodando, e isso
+# gerava CORS preflight 400. Em prod, allowlist exata pelo dominio.
+_is_localhost_dev = FRONTEND_ORIGIN.startswith("http://localhost")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[FRONTEND_ORIGIN],
+    allow_origin_regex=r"^http://localhost:\d+$" if _is_localhost_dev else None,
+    allow_origins=[FRONTEND_ORIGIN] if not _is_localhost_dev else [],
     allow_methods=["*"],
     allow_headers=["*"],
     allow_credentials=True,
