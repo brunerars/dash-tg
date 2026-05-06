@@ -26,6 +26,8 @@ services:
       # Bind-mount do codigo pra dev loop rapido — alteracoes python refletem sem rebuild
       # (uvicorn --reload reinicia ao detectar mudanca). Em prod, remover este mount.
       - ./:/app:rw
+      # Diretorio compartilhado com precompute_worker pros uploads das planilhas
+      - precompute_uploads:/tmp/precompute
 
   workers:
     build: .
@@ -41,6 +43,23 @@ services:
     restart: unless-stopped
     volumes:
       - ./:/app:rw
+
+  precompute_worker:
+    build: .
+    command: ["arq", "worker_precompute.WorkerSettings"]
+    env_file: .env
+    depends_on:
+      redis:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+      cache-flush:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    volumes:
+      - ./:/app:rw
+      # Mesmo volume da api — recebe os arquivos uploadados pra processar
+      - precompute_uploads:/tmp/precompute
 
   redis:
     image: redis:7-alpine
@@ -69,3 +88,4 @@ services:
 volumes:
   redis_data:
   postgres_data:
+  precompute_uploads:

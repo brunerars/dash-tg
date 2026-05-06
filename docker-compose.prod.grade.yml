@@ -37,6 +37,9 @@ services:
     networks:
       - network_public
       - dashtg_grade_internal
+    volumes:
+      # Volume compartilhado com precompute_worker pros uploads
+      - precompute_uploads:/tmp/precompute
     healthcheck:
       test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:8000/health', timeout=3.0)"]
       interval: 60s
@@ -47,7 +50,9 @@ services:
       replicas: 1
       resources:
         limits:
-          memory: 2048M
+          # API nao processa pandas/calamine — limite reduzido vs antes
+          # (worker dedicado faz o trabalho pesado em container separado)
+          memory: 1024M
       restart_policy:
         condition: on-failure
       labels:
@@ -58,6 +63,34 @@ services:
         - traefik.http.routers.dashtg_grade_api.tls.certresolver=letsencryptresolver
         - traefik.http.services.dashtg_grade_api.loadbalancer.server.port=8000
         - traefik.http.routers.dashtg_grade_api.service=dashtg_grade_api
+
+  # ================= Precompute Worker (ARQ) =================
+  # Container separado pra processar uploads pesados de planilhas.
+  # Se ele cair por OOM com arquivo gigante, a API continua viva —
+  # Swarm reinicia o worker e a fila ARQ retoma o job pendente.
+  precompute_worker:
+    image: ${IMAGE_API_GRADE}:latest
+    command: ["arq", "worker_precompute.WorkerSettings"]
+    environment:
+      - REDIS_URL=redis://dashtg_grade_redis:6379
+      - CACHE_TTL_ANALYSIS=${CACHE_TTL_ANALYSIS:-86400}
+      - CACHE_TTL_EXPORT=${CACHE_TTL_EXPORT:-3600}
+      - CACHE_TTL_JOB=${CACHE_TTL_JOB:-7200}
+      - PRECOMPUTE_WORKERS=${PRECOMPUTE_WORKERS:-1}
+      - DATABASE_URL=postgresql+asyncpg://dashgrade:${POSTGRES_PASSWORD}@dashtg_grade_postgres:5432/dash_grade
+      - RUN_SCHEDULERS=false
+    networks:
+      - dashtg_grade_internal
+    volumes:
+      - precompute_uploads:/tmp/precompute
+    deploy:
+      replicas: 1
+      resources:
+        limits:
+          # Worker faz parsing de xlsx + pandas + concat — precisa de RAM
+          memory: 3072M
+      restart_policy:
+        condition: on-failure
 
   # ================= Workers (scraper + favorites sync) =================
   workers:
@@ -158,3 +191,4 @@ networks:
 volumes:
   dashtg_grade_redis_data:
   dashtg_grade_postgres_data:
+  precompute_uploads:

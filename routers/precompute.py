@@ -1,162 +1,60 @@
+"""Endpoint /precompute — salva arquivos no volume compartilhado e
+enfileira **uma** task ARQ (`process_precompute_task`) no worker dedicado.
+
+Toda CPU/RAM pesada (parse xlsx, dedup, metrics) acontece no container
+`precompute_worker`. A API responde 202 imediato e nunca cai por OOM
+de upload pesado.
+
+Endpoints:
+- POST /precompute       -> 202, dispara worker
+- GET  /jobs/status?ids  -> bulk polling do frontend
+- GET  /jobs/{job_id}    -> single polling
+"""
 from __future__ import annotations
 
-import asyncio
-import gc
-import io
 import logging
+import os
 import uuid
-from concurrent.futures import ThreadPoolExecutor
-from datetime import date, timedelta
-from itertools import combinations
+from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
-import hashlib
-
-from config.settings import PRECOMPUTE_WORKERS
-from config.strategies import ESTRATEGIAS, get_strategy_internal
-from esoccer_dashboard.services.cache import (
-    store_job, get_job, gerar_cache_key, get_or_compute,
-    get_file_df, store_file_df,
-)
-from esoccer_dashboard.services.loader import load_tips_enviadas
+from arq_client import get_arq_pool
+from config.strategies import get_strategy_internal
+from esoccer_dashboard.services.cache import get_job, store_job
 from middleware.auth import verify_jwt_cookie
-from routers.analysis import _build_analysis_result, _UploadFileAdapter
+from precompute_jobs import PRECOMPUTE_PERIODS, all_nonempty_combinations
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 AuthDep = Annotated[str, Depends(verify_jwt_cookie)]
 
-_executor = ThreadPoolExecutor(max_workers=PRECOMPUTE_WORKERS)
-
-# Strong references to background tasks to prevent garbage collection (Python can GC
-# unref'd asyncio.Task objects, silently killing the coroutine mid-execution).
-_background_tasks: set[asyncio.Task] = set()
+# Volume compartilhado entre api e precompute_worker no docker-compose.
+UPLOAD_DIR = Path("/tmp/precompute")
 
 
-def _preparse_files(files_contents: list[tuple[str, bytes]]) -> None:
-    """Parse each unique file and cache the DataFrame in Redis as parquet+zstd.
-
-    Parquet+zstd footprint ~5-10x smaller than pickle (compressao colunar
-    nativa), e libera o DataFrame entre iteracoes via gc.collect() pra
-    evitar acumulo de RAM quando ha multiplos arquivos pesados.
-
-    This runs BEFORE dispatching background jobs so that workers
-    get instant cache hits instead of re-parsing the xlsx.
+def _save_uploads_to_disk(
+    batch_id: str, files: list[UploadFile]
+) -> list[tuple[str, str]]:
+    """Salva uploads em /tmp/precompute/<batch_id>/ e retorna lista
+    [(filename, abs_path)]. Cria o diretorio se nao existir.
     """
-    for name, content in files_contents:
-        file_hash = hashlib.md5(content).hexdigest()
-        if get_file_df(file_hash) is not None:
-            logger.info("File %s already cached (hash=%s)", name, file_hash[:8])
-            continue
-        logger.info("Pre-parsing %s (%d MB, hash=%s)...", name, len(content) // (1024 * 1024), file_hash[:8])
-        adapter = _UploadFileAdapter(name, content)
-        result = load_tips_enviadas([adapter])
-        rows = len(result.df)
-        buf = io.BytesIO()
-        result.df.to_parquet(buf, engine="pyarrow", compression="zstd")
-        parquet_bytes = buf.getvalue()
-        store_file_df(file_hash, parquet_bytes)
-        logger.info(
-            "Pre-parsed %s — %d rows, cached %d MB parquet (zstd)",
-            name, rows, len(parquet_bytes) // (1024 * 1024),
-        )
-        # Libera DataFrame e buffers — evita acumulo entre iteracoes
-        del result, buf, parquet_bytes
-        gc.collect()
-
-
-def _all_nonempty_combinations(
-    files: list[tuple[str, bytes]],
-) -> list[list[tuple[str, bytes]]]:
-    """All non-empty subsets of files, sorted by size ascending. N files -> 2^N-1 combos."""
-    result: list[list[tuple[str, bytes]]] = []
-    for r in range(1, len(files) + 1):
-        for combo in combinations(files, r):
-            result.append(list(combo))
-    return result
-
-
-async def _dispatch_job(
-    job_id: str,
-    strategy_name: str,
-    files_contents: list[tuple[str, bytes]],
-    date_from: str | None = None,
-    date_to: str | None = None,
-) -> None:
-    """Updates job to running, executes pipeline in thread pool via get_or_compute,
-    updates to completed/failed.
-
-    CRITICAL: Must use get_or_compute() — NOT _build_analysis_result() directly.
-    get_or_compute stores the result under analysis:{cache_key} in Redis.
-    Without this, /analyze would never see the pre-computed result (cache_hit=false).
-    """
-    n_files = len(files_contents)
-    file_names = [name for name, _ in files_contents]
-    period_label = f", period={date_from}..{date_to}" if date_from else ""
-    logger.info("Job %s RUNNING — strategy=%s, files=%d %s%s", job_id[:8], strategy_name, n_files, file_names, period_label)
-    store_job(job_id, status="running", filenames=file_names)
-    loop = asyncio.get_running_loop()
-    try:
-        files_bytes = [content for _, content in files_contents]
-        cache_key = gerar_cache_key(files_bytes, strategy_name, date_from, date_to)
-
-        _result, _cache_hit = await loop.run_in_executor(
-            _executor,
-            lambda: get_or_compute(
-                cache_key,
-                lambda: _build_analysis_result(strategy_name, files_contents, date_from, date_to),
-            ),
-        )
-        logger.info("Job %s COMPLETED — cache_key=%s, cache_hit=%s", job_id[:8], cache_key[:12], _cache_hit)
-        store_job(job_id, status="completed", cache_key=cache_key, filenames=file_names)
-    except Exception as exc:
-        logger.error("Job %s FAILED — %s", job_id[:8], exc, exc_info=True)
-        store_job(job_id, status="failed", error=str(exc), filenames=file_names)
-
-
-PRECOMPUTE_PERIODS = [15, 30, 60, 90]
-
-
-def _period_date_range(days: int) -> tuple[str, str]:
-    """Return (date_from, date_to) for a quick-period preset."""
-    today = date.today()
-    return (today - timedelta(days=days)).isoformat(), today.isoformat()
-
-
-async def _dispatch_remaining_after_primary(
-    primary_job_id: str,
-    strategy_name: str,
-    combos: list[list[tuple[str, bytes]]],
-    job_ids: list[str],
-    period_jobs: list[tuple[str, int, list[tuple[str, bytes]]]] | None = None,
-) -> None:
-    """Wait for the primary job to finish, then dispatch remaining combos ONE AT A TIME.
-
-    This prevents GIL contention and memory pressure from running
-    multiple CPU-heavy pandas pipelines in parallel.
-    """
-    # Wait for primary to finish before starting subsets
-    while True:
-        job = get_job(primary_job_id)
-        if job and job.get("status") in ("completed", "failed"):
-            break
-        await asyncio.sleep(2)
-
-    # Dispatch period variants for the full combo first (high value for UX)
-    if period_jobs:
-        logger.info("Primary done. Dispatching %d period variants sequentially.", len(period_jobs))
-        for jid, days, full_combo in period_jobs:
-            dfrom, dto = _period_date_range(days)
-            store_job(jid, status="pending")
-            await _dispatch_job(jid, strategy_name, full_combo, date_from=dfrom, date_to=dto)
-
-    logger.info("Dispatching %d remaining file combos sequentially.", len(combos))
-    for jid, combo in zip(job_ids, combos):
-        store_job(jid, status="pending")
-        await _dispatch_job(jid, strategy_name, combo)
+    batch_dir = UPLOAD_DIR / batch_id
+    batch_dir.mkdir(parents=True, exist_ok=True)
+    saved: list[tuple[str, str]] = []
+    for i, uf in enumerate(files):
+        name = uf.filename or f"file_{i}.xlsx"
+        # Sanitiza pra evitar path traversal — so o basename
+        safe_name = os.path.basename(name)
+        dest = batch_dir / safe_name
+        # Stream em chunks pra nao carregar arquivo inteiro em RAM da API
+        with dest.open("wb") as fp:
+            while chunk := uf.file.read(1024 * 1024):  # 1 MB chunks
+                fp.write(chunk)
+        saved.append((safe_name, str(dest.resolve())))
+    return saved
 
 
 @router.post(
@@ -170,92 +68,103 @@ async def precompute(
     files: list[UploadFile] = File(...),
     strategy: str = Form(...),
 ) -> dict:
-    """Upload N planilhas e dispara jobs em background para a estrategia indicada.
-    Gera 2^N-1 combinacoes. A combinacao completa (todos os arquivos) e
-    priorizada — seu job_id vem no campo ``primary_job_id``.
-    Retorna job_ids para polling via GET /jobs/status."""
+    """Upload de N planilhas + estrategia. Salva arquivos no disco,
+    enfileira ARQ task no worker e retorna 202 imediato com job_ids
+    pra polling. Worker processa primary + 4 periodos + 2^N-1 combos
+    sequencialmente.
+    """
     if len(files) < 1:
         raise HTTPException(status_code=422, detail="Envie pelo menos 1 arquivo.")
 
     if get_strategy_internal(strategy) is None:
         raise HTTPException(status_code=422, detail=f"Estrategia invalida: {strategy}")
 
-    # Read all file bytes BEFORE returning response (UploadFile closes after response)
-    files_contents: list[tuple[str, bytes]] = []
-    for i, uf in enumerate(files):
-        content = await uf.read()
-        files_contents.append((uf.filename or f"file_{i}.xlsx", content))
-
-    # Check for duplicate filenames
-    filenames = [name for name, _ in files_contents]
+    # Checa nomes duplicados ANTES de salvar (evita sobrescrever)
+    filenames_raw = [uf.filename or f"file_{i}.xlsx" for i, uf in enumerate(files)]
     seen: set[str] = set()
-    duplicates = [f for f in filenames if f in seen or seen.add(f)]  # type: ignore[func-returns-value]
+    duplicates = [f for f in filenames_raw if f in seen or seen.add(f)]  # type: ignore[func-returns-value]
     if duplicates:
         raise HTTPException(
             status_code=422,
             detail=f"Arquivos com nome repetido nao sao permitidos: {duplicates}",
         )
 
-    combos = _all_nonempty_combinations(files_contents)
-
+    # 1. Salva uploads em disco — API nao mantem bytes em RAM
+    batch_id = str(uuid.uuid4())
+    saved = _save_uploads_to_disk(batch_id, files)
+    saved_names = [n for n, _ in saved]
     logger.info(
-        "Precompute: strategy=%s, files=%d, combos=%d",
-        strategy, len(files_contents), len(combos),
+        "Precompute batch=%s strategy=%s files=%d (%s)",
+        batch_id[:8], strategy, len(saved), saved_names,
     )
 
-    # Pre-parse all files BEFORE dispatching jobs.
-    # calamine is fast (~10s/10MB) but still worth caching for the 7 combos.
-    loop = asyncio.get_running_loop()
-    await loop.run_in_executor(_executor, lambda: _preparse_files(files_contents))
-    logger.info("All files pre-parsed and cached.")
+    # 2. Gera todos os job_ids upfront (frontend precisa deles no response)
+    n_files = len(saved)
+    n_combos = 2 ** n_files - 1  # subsets nao vazios
+    full_combo_names = saved_names  # todos juntos = primary
 
-    # Build job list with filenames per combo (for frontend mapping)
-    full_combo = combos[-1]  # all files combined
-    remaining_combos = combos[:-1]
+    # Fake "files_contents" so pra reusar all_nonempty_combinations e gerar
+    # a ordem dos combos. Sem bytes — substituidos por (name, b"") aqui.
+    placeholder_combos = all_nonempty_combinations(
+        [(n, b"") for n in saved_names]
+    )
+    # all_nonempty_combinations retorna do menor pro maior, primary = ultimo
+    full_combo = placeholder_combos[-1]
+    remaining_combos = placeholder_combos[:-1]
 
-    # Primary job: full combination (dispatched immediately)
+    # Primary
     primary_job_id = str(uuid.uuid4())
-    primary_filenames = [name for name, _ in full_combo]
-    store_job(primary_job_id, status="pending", filenames=primary_filenames)
-    t = asyncio.create_task(_dispatch_job(primary_job_id, strategy, full_combo))
-    _background_tasks.add(t)
-    t.add_done_callback(_background_tasks.discard)
+    store_job(primary_job_id, status="pending", filenames=full_combo_names)
 
-    # Period jobs: full combo × 4 standard periods (15d, 30d, 60d, 90d)
-    period_job_list: list[tuple[str, int, list[tuple[str, bytes]]]] = []
+    # 4 periodos sobre o full combo
     period_jobs_response: list[dict] = []
+    period_jobs_payload: list[dict] = []
     for days in PRECOMPUTE_PERIODS:
         jid = str(uuid.uuid4())
-        period_job_list.append((jid, days, full_combo))
+        store_job(jid, status="pending", filenames=full_combo_names)
         period_jobs_response.append({
             "job_id": jid,
-            "filenames": primary_filenames,
+            "filenames": full_combo_names,
             "period_days": days,
         })
+        period_jobs_payload.append({"job_id": jid, "days": days})
 
-    # Remaining combos: dispatched sequentially AFTER primary completes
-    remaining_jobs: list[dict] = []
-    remaining_ids: list[str] = []
+    # Remaining combos (subsets menores)
+    remaining_response: list[dict] = []
+    remaining_payload: list[dict] = []
     for combo in remaining_combos:
         jid = str(uuid.uuid4())
-        combo_filenames = [name for name, _ in combo]
-        remaining_ids.append(jid)
-        remaining_jobs.append({"job_id": jid, "filenames": combo_filenames})
+        combo_filenames = [n for n, _ in combo]
+        store_job(jid, status="pending", filenames=combo_filenames)
+        remaining_response.append({"job_id": jid, "filenames": combo_filenames})
+        remaining_payload.append({"job_id": jid, "filenames": combo_filenames})
 
-    if remaining_ids or period_job_list:
-        bg_task = asyncio.create_task(
-            _dispatch_remaining_after_primary(
-                primary_job_id, strategy, remaining_combos, remaining_ids,
-                period_jobs=period_job_list,
-            )
-        )
-        _background_tasks.add(bg_task)
-        bg_task.add_done_callback(_background_tasks.discard)
+    # 3. Enfileira UMA task ARQ que executa tudo sequencial
+    pool = await get_arq_pool()
+    payload = {
+        "batch_id": batch_id,
+        "strategy_name": strategy,
+        "saved_files": saved,  # [(filename, abs_path)]
+        "primary_job_id": primary_job_id,
+        "period_jobs": period_jobs_payload,
+        "remaining_combos": remaining_payload,
+    }
+    await pool.enqueue_job("process_precompute_task", payload)
+    logger.info(
+        "Enqueued ARQ job — primary=%s, periods=%d, remaining=%d, total_jobs=%d, n_combos=%d",
+        primary_job_id[:8], len(period_jobs_payload), len(remaining_payload),
+        1 + len(period_jobs_payload) + len(remaining_payload), n_combos,
+    )
 
-    all_job_ids = [primary_job_id] + [p["job_id"] for p in period_jobs_response] + remaining_ids
-
-    # Return combo→filenames mapping so frontend can map file selection to cache_key
-    combo_map = [{"job_id": primary_job_id, "filenames": primary_filenames}] + remaining_jobs
+    all_job_ids = (
+        [primary_job_id]
+        + [p["job_id"] for p in period_jobs_response]
+        + [r["job_id"] for r in remaining_response]
+    )
+    combo_map = (
+        [{"job_id": primary_job_id, "filenames": full_combo_names}]
+        + remaining_response
+    )
 
     return {
         "job_ids": all_job_ids,
@@ -301,7 +210,7 @@ def get_jobs_bulk_status(_user: AuthDep, ids: str = "") -> dict:
     summary="Status de um job de pre-computacao",
 )
 def get_job_status(_user: AuthDep, job_id: str) -> dict:
-    """Retorna status do job: pending, running, completed (com cache_key), ou failed (com error)."""
+    """Retorna status do job: pending, running, completed (com cache_key) ou failed."""
     job = get_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Job nao encontrado ou expirado.")
