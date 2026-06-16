@@ -128,7 +128,7 @@ def load_tips_enviadas(files: Iterable[UploadedLike]) -> LoadResult:
             _col_renames["Horário Jogo"] = "Horario Jogo"
         if _col_renames:
             df = df.rename(columns=_col_renames)
-        _optional = [c for c in ("Linha", "Horario Jogo") if c in df.columns]
+        _optional = [c for c in ("Linha", "Horario Jogo", "Placar Envio", "Placar Final", "Odd") if c in df.columns]
         df = df.loc[:, list(REQUIRED_COLUMNS) + _optional].copy()
         df["__source_file"] = source_name
         df["__bet"] = _detect_bet(source_name)

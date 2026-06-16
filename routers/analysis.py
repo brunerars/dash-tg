@@ -323,9 +323,11 @@ def get_blueprint_data(
     filtered = [r for r in records if r.get("DuplaNormalizada") == dupla]
     if linha is not None:
         filtered = [r for r in filtered if str(r.get("Linha", "")) == linha]
-    cols = ["Torneio", "Confronto", "Data", "Horario Jogo", "Hora", "Resultado", "Lucro/Prej.", "__bet"]
-    if linha:
-        cols.insert(3, "Linha")
+    cols = [
+        "Torneio", "Confronto", "Linha", "Data", "Horario Jogo", "Hora",
+        "Placar Envio", "Placar Final", "Odd",
+        "Resultado", "Lucro/Prej.", "__bet",
+    ]
     # Só incluir colunas que existem nos dados
     available_cols = set()
     if filtered:
